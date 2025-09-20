@@ -329,6 +329,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
         }
         throw;
     }
+
 }
 
 HttpClient::HttpResponse HttpClient::fetch(const std::string& method,

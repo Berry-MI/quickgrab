@@ -34,7 +34,11 @@ public:
                        const std::vector<Header>& headers,
                        const std::string& body,
                        const std::string& affinityKey,
-                       std::chrono::seconds timeout,\n                       bool followRedirects = false,\n                       unsigned int maxRedirects = 5,\n                       std::string* effectiveUrl = nullptr);
+                       std::chrono::seconds timeout,
+                       bool followRedirects = false,
+                       unsigned int maxRedirects = 5,
+                       std::string* effectiveUrl = nullptr,
+                       bool useProxy = false);
 
 private:
     boost::asio::io_context& io_;
@@ -43,6 +47,4 @@ private:
 };
 
 } // namespace quickgrab::util
-
-
 

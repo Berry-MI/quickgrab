@@ -116,4 +116,31 @@ void RequestsRepository::updateStatus(int requestId, int status) {
     }
 }
 
+void RequestsRepository::updateThreadId(int requestId, const std::string& threadId) {
+    auto connection = pool_.acquire();
+    try {
+        std::unique_ptr<sql::PreparedStatement> stmt(connection->prepareStatement(
+            "UPDATE requests SET thread_id = ?, updated_at = NOW() WHERE id = ?"));
+        stmt->setString(1, threadId);
+        stmt->setInt(2, requestId);
+        stmt->executeUpdate();
+    } catch (const sql::SQLException& ex) {
+        util::log(util::LogLevel::error, std::string{"Update request thread failed: "} + ex.what());
+        throw;
+    }
+}
+
+void RequestsRepository::deleteById(int requestId) {
+    auto connection = pool_.acquire();
+    try {
+        std::unique_ptr<sql::PreparedStatement> stmt(
+            connection->prepareStatement("DELETE FROM requests WHERE id = ?"));
+        stmt->setInt(1, requestId);
+        stmt->executeUpdate();
+    } catch (const sql::SQLException& ex) {
+        util::log(util::LogLevel::error, std::string{"Delete request failed: "} + ex.what());
+        throw;
+    }
+}
+
 } // namespace quickgrab::repository

@@ -27,6 +27,7 @@ add_library(quickgrab_core
     src/controller/ToolController.cpp
     src/controller/UserController.cpp
     src/service/GrabService.cpp
+    src/service/MailService.cpp
     src/service/ProxyService.cpp
     src/service/QueryService.cpp
     src/repository/DatabaseConfig.cpp

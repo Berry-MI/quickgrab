@@ -1,15 +1,18 @@
 #pragma once
 
-#include \"quickgrab/proxy/ProxyPool.hpp\"
-#include \"quickgrab/repository/RequestsRepository.hpp\"
-#include \"quickgrab/repository/ResultsRepository.hpp\"
-#include \"quickgrab/util/HttpClient.hpp\"
-#include \"quickgrab/workflow/GrabWorkflow.hpp\"
+#include "quickgrab/proxy/ProxyPool.hpp"
+#include "quickgrab/repository/RequestsRepository.hpp"
+#include "quickgrab/repository/ResultsRepository.hpp"
+#include "quickgrab/service/MailService.hpp"
+#include "quickgrab/util/HttpClient.hpp"
+#include "quickgrab/workflow/GrabWorkflow.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/thread_pool.hpp>
+#include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace quickgrab::service {
@@ -21,13 +24,18 @@ public:
                 repository::RequestsRepository& requests,
                 repository::ResultsRepository& results,
                 util::HttpClient& client,
-                proxy::ProxyPool& proxies);
+                proxy::ProxyPool& proxies,
+                MailService& mailService);
 
     void processPending();
 
 private:
-    void executeRequest(const model::Request& request);
+    void executeRequest(model::Request request);
+    void executeGrab(model::Request request);
     void handleResult(const model::Request& request, const workflow::GrabResult& result);
+    long computeAdjustedLatency(const model::Request& request) const;
+    long computeProcessingTime(const model::Request& request) const;
+    long computeSchedulingTime() const;
 
     boost::asio::io_context& io_;
     boost::asio::thread_pool& worker_;
@@ -35,7 +43,14 @@ private:
     repository::ResultsRepository& results_;
     util::HttpClient& httpClient_;
     proxy::ProxyPool& proxyPool_;
+    MailService& mailService_;
     std::unique_ptr<workflow::GrabWorkflow> workflow_;
+    std::atomic<long> adjustedFactor_;
+    long processingTime_;
+    std::chrono::system_clock::time_point updateTime_;
+    std::chrono::system_clock::time_point prestartTime_;
+    long schedulingTime_;
+    mutable std::mutex metricsMutex_;
 };
 
 } // namespace quickgrab::service

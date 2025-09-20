@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="indi.wookat.quickgrab.mapper.ResultsMapper">
+
+    <resultMap id="BaseResultMap" type="indi.wookat.quickgrab.entity.Results">
+        <id property="id" column="id" jdbcType="INTEGER"/>
+        <result property="deviceId" column="device_id" jdbcType="INTEGER"/>
+        <result property="buyerId" column="buyer_id" jdbcType="INTEGER"/>
+        <result property="threadId" column="thread_id" jdbcType="VARCHAR"/>
+        <result property="link" column="link" jdbcType="VARCHAR"/>
+        <result property="cookies" column="cookies" jdbcType="VARCHAR"/>
+        <result property="orderInfo" column="order_info" jdbcType="VARCHAR"/>
+        <result property="userInfo" column="user_info" jdbcType="VARCHAR"/>
+        <result property="orderTemplate" column="order_template" jdbcType="VARCHAR"/>
+        <result property="message" column="message" jdbcType="VARCHAR"/>
+        <result property="idNumber" column="id_number" jdbcType="VARCHAR"/>
+        <result property="keyword" column="keyword" jdbcType="VARCHAR"/>
+        <result property="startTime" column="start_time" jdbcType="TIMESTAMP"/>
+        <result property="endTime" column="end_time" jdbcType="TIMESTAMP"/>
+        <result property="quantity" column="quantity" jdbcType="INTEGER"/>
+        <result property="delay" column="delay" jdbcType="INTEGER"/>
+        <result property="frequency" column="frequency" jdbcType="INTEGER"/>
+        <result property="type" column="type" jdbcType="INTEGER"/>
+        <result property="status" column="status" jdbcType="INTEGER"/>
+        <result property="responseMessage" column="response_message" jdbcType="VARCHAR"/>
+        <result property="actualEarnings" column="actual_earnings" jdbcType="DECIMAL"/>
+        <result property="estimatedEarnings" column="estimated_earnings" jdbcType="DECIMAL"/>
+        <result property="extension" column="extension" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,device_id,buyer_id,
+        thread_id,link,cookies,
+        order_info,user_info,order_template,
+        message,id_number,keyword,
+        start_time,end_time,quantity,
+        delay,frequency,type,
+        status,response_message,actual_earnings,
+        estimated_earnings,extension
+    </sql>
+
+    <sql id="Part_Column_List">
+        id,device_id,buyer_id,
+        thread_id,order_info,user_info,
+        start_time,end_time,type,
+        status,actual_earnings,
+        estimated_earnings
+    </sql>
+
+
+    <select id="selectByPrimaryKey" parameterType="java.lang.Long" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List"/>
+        from results
+        where id = #{id,jdbcType=INTEGER}
+    </select>
+
+
+    <select id="findResultsByFilters" resultType="indi.wookat.quickgrab.entity.Results" resultMap="BaseResultMap">
+        SELECT * FROM results
+        WHERE 1=1
+        <if test="keyword != null and keyword != ''">
+            AND (user_info LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        <if test="buyerId != null and buyerId != ''">
+            AND buyer_id = #{buyerId}
+        </if>
+        <if test="type != null">
+            AND type = #{type}
+        </if>
+        <if test="status != null">
+            AND status = #{status}
+        </if>
+        ORDER BY ${orderColumn} ${orderDirection}
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <!-- 查询统计数据 -->
+    <select id="getStatistics" resultType="java.util.Map">
+        SELECT
+        type,
+        IFNULL(SUM(successCount), 0) AS successCount,
+        IFNULL(SUM(failureCount), 0) AS failureCount,
+        IFNULL(SUM(exceptionCount), 0) AS exceptionCount,
+        IFNULL(SUM(totalCount), 0) AS totalCount,
+        IFNULL(SUM(successEarnings), 0) AS successEarnings,
+        IFNULL(SUM(failureEarnings), 0) AS failureEarnings,
+        IFNULL(SUM(exceptionEarnings), 0) AS exceptionEarnings,
+        IFNULL(SUM(totalEarnings), 0) AS totalEarnings
+        FROM (
+        SELECT
+        CASE
+        WHEN type IS NULL THEN 'total'
+        ELSE CAST(type AS CHAR)
+        END AS type,
+        SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS successCount,
+        SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS failureCount,
+        SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) AS exceptionCount,
+        COUNT(*) AS totalCount,
+        SUM(CASE WHEN status = 1 THEN actual_earnings ELSE 0 END) AS successEarnings,
+        SUM(CASE WHEN status = 2 THEN actual_earnings ELSE 0 END) AS failureEarnings,
+        SUM(CASE WHEN status = 3 THEN actual_earnings ELSE 0 END) AS exceptionEarnings,
+        SUM(actual_earnings) AS totalEarnings
+        FROM results
+        <where>
+            <if test='buyerId != null'>AND buyer_id = #{buyerId}</if>
+            <if test='startTime != null'>AND start_time &gt;= #{startTime}</if>
+            <if test='endTime != null'>AND start_time &lt;= #{endTime}</if>
+        </where>
+        GROUP BY type WITH ROLLUP
+
+        UNION ALL
+
+        SELECT '1' AS type, 0, 0, 0, 0, 0, 0, 0, 0
+        UNION ALL
+        SELECT '2' AS type, 0, 0, 0, 0, 0, 0, 0, 0
+        UNION ALL
+        SELECT '3' AS type, 0, 0, 0, 0, 0, 0, 0, 0
+        UNION ALL
+        SELECT 'total' AS type, 0, 0, 0, 0, 0, 0, 0, 0
+        ) AS stats
+        GROUP BY type
+    </select>
+
+
+    <!-- 获取过去15天的每日统计数据 -->
+    <select id="getDailyStats" resultType="java.util.Map">
+        SELECT
+        dates.date AS date,
+        IFNULL(COUNT(r.id), 0) AS total,
+        IFNULL(SUM(r.actual_earnings), 0) AS earnings
+        FROM
+        (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date
+        FROM seq_0_to_14) dates
+        LEFT JOIN results r ON DATE(r.start_time) = dates.date
+        <if test="buyerId != null">AND r.buyer_id = #{buyerId}</if>
+        <if test="status != null">AND r.status = #{status}</if>
+        GROUP BY dates.date
+        ORDER BY dates.date
+    </select>
+
+    <!-- 获取过去24小时的每小时统计数据 -->
+    <select id="getHourlyStats" resultType="java.util.Map">
+        SELECT
+        hours.hour AS hour,
+        IFNULL(COUNT(r.id), 0) AS total,
+        IFNULL(SUM(r.actual_earnings), 0) AS earnings
+        FROM
+        (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL
+        SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL
+        SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL
+        SELECT 15 UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL
+        SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours
+        LEFT JOIN results r ON HOUR(r.start_time) = hours.hour
+        AND r.start_time >= NOW() - INTERVAL 1 DAY
+        <if test="buyerId != null">AND r.buyer_id = #{buyerId}</if>
+        <if test="status != null">AND r.status = #{status}</if>
+        GROUP BY hours.hour
+        ORDER BY hours.hour
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap" resultType="indi.wookat.quickgrab.entity.Results">
+        select
+        <include refid="Base_Column_List"/>
+        from results
+    </select>
+    <select id="selectByKeyword" resultMap="BaseResultMap" resultType="indi.wookat.quickgrab.entity.Results">
+        select
+        <include refid="Base_Column_List"/>
+        from results
+        where user_info like #{keyword,jdbcType=VARCHAR}
+    </select>
+
+    <delete id="deleteByPrimaryKey" parameterType="java.lang.Long">
+        delete
+        from results
+        where id = #{id,jdbcType=INTEGER}
+    </delete>
+    <insert id="insert" keyColumn="id" keyProperty="id" parameterType="indi.wookat.quickgrab.entity.Results"
+            useGeneratedKeys="true">
+        insert into results
+        ( id, device_id, buyer_id
+        , thread_id, link, cookies
+        , order_info, user_info, order_template
+        , message, id_number, keyword
+        , start_time, end_time, quantity
+        , delay, frequency, type
+        , status, response_message, actual_earnings
+        , estimated_earnings, extension)
+        values ( #{id,jdbcType=INTEGER}, #{deviceId,jdbcType=INTEGER}, #{buyerId,jdbcType=INTEGER}
+               , #{threadId,jdbcType=VARCHAR}, #{link,jdbcType=VARCHAR}, #{cookies,jdbcType=VARCHAR}
+               , #{orderInfo,jdbcType=VARCHAR}, #{userInfo,jdbcType=VARCHAR}, #{orderTemplate,jdbcType=VARCHAR}
+               , #{message,jdbcType=VARCHAR}, #{idNumber,jdbcType=VARCHAR}, #{keyword,jdbcType=VARCHAR}
+               , #{startTime,jdbcType=TIMESTAMP}, #{endTime,jdbcType=TIMESTAMP}, #{quantity,jdbcType=INTEGER}
+               , #{delay,jdbcType=INTEGER}, #{frequency,jdbcType=INTEGER}, #{type,jdbcType=INTEGER}
+               , #{status,jdbcType=INTEGER}, #{responseMessage,jdbcType=VARCHAR}, #{actualEarnings,jdbcType=DECIMAL}
+               , #{estimatedEarnings,jdbcType=DECIMAL}, #{extension,jdbcType=VARCHAR})
+    </insert>
+    <insert id="insertSelective" keyColumn="id" keyProperty="id" parameterType="indi.wookat.quickgrab.entity.Results"
+            useGeneratedKeys="true">
+        insert into results
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="id != null">id,</if>
+            <if test="deviceId != null">device_id,</if>
+            <if test="buyerId != null">buyer_id,</if>
+            <if test="threadId != null">thread_id,</if>
+            <if test="link != null">link,</if>
+            <if test="cookies != null">cookies,</if>
+            <if test="orderInfo != null">order_info,</if>
+            <if test="userInfo != null">user_info,</if>
+            <if test="orderTemplate != null">order_template,</if>
+            <if test="message != null">message,</if>
+            <if test="idNumber != null">id_number,</if>
+            <if test="keyword != null">keyword,</if>
+            <if test="startTime != null">start_time,</if>
+            <if test="endTime != null">end_time,</if>
+            <if test="quantity != null">quantity,</if>
+            <if test="delay != null">delay,</if>
+            <if test="frequency != null">frequency,</if>
+            <if test="type != null">type,</if>
+            <if test="status != null">status,</if>
+            <if test="responseMessage != null">response_message,</if>
+            <if test="actualEarnings != null">actual_earnings,</if>
+            <if test="estimatedEarnings != null">estimated_earnings,</if>
+            <if test="extension != null">extension,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="id != null">#{id,jdbcType=INTEGER},</if>
+            <if test="deviceId != null">#{deviceId,jdbcType=INTEGER},</if>
+            <if test="buyerId != null">#{buyerId,jdbcType=INTEGER},</if>
+            <if test="threadId != null">#{threadId,jdbcType=VARCHAR},</if>
+            <if test="link != null">#{link,jdbcType=VARCHAR},</if>
+            <if test="cookies != null">#{cookies,jdbcType=VARCHAR},</if>
+            <if test="orderInfo != null">#{orderInfo,jdbcType=VARCHAR},</if>
+            <if test="userInfo != null">#{userInfo,jdbcType=VARCHAR},</if>
+            <if test="orderTemplate != null">#{orderTemplate,jdbcType=VARCHAR},</if>
+            <if test="message != null">#{message,jdbcType=VARCHAR},</if>
+            <if test="idNumber != null">#{idNumber,jdbcType=VARCHAR},</if>
+            <if test="keyword != null">#{keyword,jdbcType=VARCHAR},</if>
+            <if test="startTime != null">#{startTime,jdbcType=TIMESTAMP},</if>
+            <if test="endTime != null">#{endTime,jdbcType=TIMESTAMP},</if>
+            <if test="quantity != null">#{quantity,jdbcType=INTEGER},</if>
+            <if test="delay != null">#{delay,jdbcType=INTEGER},</if>
+            <if test="frequency != null">#{frequency,jdbcType=INTEGER},</if>
+            <if test="type != null">#{type,jdbcType=INTEGER},</if>
+            <if test="status != null">#{status,jdbcType=INTEGER},</if>
+            <if test="responseMessage != null">#{responseMessage,jdbcType=VARCHAR},</if>
+            <if test="actualEarnings != null">#{actualEarnings,jdbcType=DECIMAL},</if>
+            <if test="estimatedEarnings != null">#{estimatedEarnings,jdbcType=DECIMAL},</if>
+            <if test="extension != null">#{extension,jdbcType=VARCHAR},</if>
+        </trim>
+    </insert>
+    <update id="updateByPrimaryKeySelective" parameterType="indi.wookat.quickgrab.entity.Results">
+        update results
+        <set>
+            <if test="deviceId != null">
+                device_id = #{deviceId,jdbcType=INTEGER},
+            </if>
+            <if test="buyerId != null">
+                buyer_id = #{buyerId,jdbcType=INTEGER},
+            </if>
+            <if test="threadId != null">
+                thread_id = #{threadId,jdbcType=VARCHAR},
+            </if>
+            <if test="link != null">
+                link = #{link,jdbcType=VARCHAR},
+            </if>
+            <if test="cookies != null">
+                cookies = #{cookies,jdbcType=VARCHAR},
+            </if>
+            <if test="orderInfo != null">
+                order_info = #{orderInfo,jdbcType=VARCHAR},
+            </if>
+            <if test="userInfo != null">
+                user_info = #{userInfo,jdbcType=VARCHAR},
+            </if>
+            <if test="orderTemplate != null">
+                order_template = #{orderTemplate,jdbcType=VARCHAR},
+            </if>
+            <if test="message != null">
+                message = #{message,jdbcType=VARCHAR},
+            </if>
+            <if test="idNumber != null">
+                id_number = #{idNumber,jdbcType=VARCHAR},
+            </if>
+            <if test="keyword != null">
+                keyword = #{keyword,jdbcType=VARCHAR},
+            </if>
+            <if test="startTime != null">
+                start_time = #{startTime,jdbcType=TIMESTAMP},
+            </if>
+            <if test="endTime != null">
+                end_time = #{endTime,jdbcType=TIMESTAMP},
+            </if>
+            <if test="quantity != null">
+                quantity = #{quantity,jdbcType=INTEGER},
+            </if>
+            <if test="delay != null">
+                delay = #{delay,jdbcType=INTEGER},
+            </if>
+            <if test="frequency != null">
+                frequency = #{frequency,jdbcType=INTEGER},
+            </if>
+            <if test="type != null">
+                type = #{type,jdbcType=INTEGER},
+            </if>
+            <if test="status != null">
+                status = #{status,jdbcType=INTEGER},
+            </if>
+            <if test="responseMessage != null">
+                response_message = #{responseMessage,jdbcType=VARCHAR},
+            </if>
+            <if test="actualEarnings != null">
+                actual_earnings = #{actualEarnings,jdbcType=DECIMAL},
+            </if>
+            <if test="estimatedEarnings != null">
+                estimated_earnings = #{estimatedEarnings,jdbcType=DECIMAL},
+            </if>
+            <if test="extension != null">
+                extension = #{extension,jdbcType=VARCHAR},
+            </if>
+        </set>
+        where id = #{id,jdbcType=INTEGER}
+    </update>
+    <update id="updateByPrimaryKey" parameterType="indi.wookat.quickgrab.entity.Results">
+        update results
+        set device_id          = #{deviceId,jdbcType=INTEGER},
+            buyer_id           = #{buyerId,jdbcType=INTEGER},
+            thread_id          = #{threadId,jdbcType=VARCHAR},
+            link               = #{link,jdbcType=VARCHAR},
+            cookies            = #{cookies,jdbcType=VARCHAR},
+            order_info         = #{orderInfo,jdbcType=VARCHAR},
+            user_info          = #{userInfo,jdbcType=VARCHAR},
+            order_template     = #{orderTemplate,jdbcType=VARCHAR},
+            message            = #{message,jdbcType=VARCHAR},
+            id_number          = #{idNumber,jdbcType=VARCHAR},
+            keyword            = #{keyword,jdbcType=VARCHAR},
+            start_time         = #{startTime,jdbcType=TIMESTAMP},
+            end_time           = #{endTime,jdbcType=TIMESTAMP},
+            quantity           = #{quantity,jdbcType=INTEGER},
+            delay              = #{delay,jdbcType=INTEGER},
+            frequency          = #{frequency,jdbcType=INTEGER},
+            type               = #{type,jdbcType=INTEGER},
+            status             = #{status,jdbcType=INTEGER},
+            response_message   = #{responseMessage,jdbcType=VARCHAR},
+            actual_earnings    = #{actualEarnings,jdbcType=DECIMAL},
+            estimated_earnings = #{estimatedEarnings,jdbcType=DECIMAL},
+            extension          = #{extension,jdbcType=VARCHAR}
+        where id = #{id,jdbcType=INTEGER}
+    </update>
+</mapper>

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据统计</title>
+    <link rel="icon" href="images/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" href="/css/styles.css">
+    <link href="fonts/remixicon.css" rel="stylesheet">
+
+    <style>
+        .chart-container {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+
+        table.table td, table.table th {
+            padding: 0.5rem;
+        }
+
+        .text-right {
+            text-align: right;
+        }
+
+        .stats-filter select,
+        .stats-filter input[type="datetime-local"] {
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        #customTimeRange {
+            display: none;
+            gap: 10px;
+        }
+
+        #customTimeRange > div {
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- 欢迎区域 -->
+    <div class="user-welcome">
+        <h2>欢迎, <span id="username"></span>!</h2>
+        <button id="logout-button">退出登录</button>
+    </div>
+
+    <!-- 筛选区域 -->
+    <div class="stats-filter">
+        <div id="buyerSelectList" style="display: none">
+            <label for="buyerSelect">选择买家：</label>
+            <select id="buyerSelect" onchange="updateStatistics();updateCharts()"></select>
+        </div>
+
+        <div>
+            <label for="timeRange">选择时间范围：</label>
+            <select id="timeRange" onchange="setCustomTimeRange()">
+                <option value="today">今日</option>
+                <option value="yesterday">昨日</option>
+                <option value="thisMonth">本月</option>
+                <option value="lastMonth">上月</option>
+                <option value="last15Days">过去15天</option>
+                <option value="last30Days">过去30天</option>
+                <option value="all">全部</option>
+                <option value="custom">自定义</option>
+            </select>
+        </div>
+
+        <div id="customTimeRange" style="display: none;">
+            <div>
+                <label for="startTime">开始时间：</label>
+                <input id="startTime" type="datetime-local">
+            </div>
+            <div>
+                <label for="endTime">结束时间：</label>
+                <input id="endTime" type="datetime-local">
+            </div>
+        </div>
+
+        <div class="time-range-display" id="selectedTimeRange"></div>
+
+        <div>
+            <label for="statusFilter">选择状态：</label>
+            <select id="statusFilter" onchange="updateStatistics()">
+                <option value="">所有状态</option>
+                <option value="1">成功</option>
+                <option value="2">失败</option>
+                <option value="3">异常</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- 统计表格 -->
+    <table class="stats-table">
+        <thead>
+        <tr>
+            <th></th>
+            <th class="text-right">成功</th>
+            <th class="text-right">失败</th>
+            <th class="text-right">异常</th>
+            <th class="text-right">总数</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr>
+            <td>定时开售</td>
+            <td class="text-right" id="timedSaleSuccess"></td>
+            <td class="text-right" id="timedSaleFailure"></td>
+            <td class="text-right" id="timedSaleException"></td>
+            <td class="text-right" id="timedSaleTotal"></td>
+        </tr>
+        <tr>
+            <td>手动上架</td>
+            <td class="text-right" id="manualSaleSuccess"></td>
+            <td class="text-right" id="manualSaleFailure"></td>
+            <td class="text-right" id="manualSaleException"></td>
+            <td class="text-right" id="manualSaleTotal"></td>
+        </tr>
+        <tr>
+            <td>捡漏模式</td>
+            <td class="text-right" id="snatchModeSuccess"></td>
+            <td class="text-right" id="snatchModeFailure"></td>
+            <td class="text-right" id="snatchModeException"></td>
+            <td class="text-right" id="snatchModeTotal"></td>
+        </tr>
+        <tr>
+            <td>总数</td>
+            <td class="text-right" id="totalSuccess"></td>
+            <td class="text-right" id="totalFailure"></td>
+            <td class="text-right" id="totalException"></td>
+            <td class="text-right" id="totalCount"></td>
+        </tr>
+        <tr>
+            <td>收益</td>
+            <td class="text-right" id="successEarnings"></td>
+            <td class="text-right" id="failureEarnings"></td>
+            <td class="text-right" id="exceptionEarnings"></td>
+            <td class="text-right" id="totalEarnings"></td>
+        </tr>
+        </tbody>
+    </table>
+
+    <!-- 图表区域 -->
+    <div class="chart-title">每日统计</div>
+    <div class="chart-container">
+        <canvas id="dailyStatsChart"></canvas>
+    </div>
+
+    <div class="chart-divider"></div>
+
+    <div class="chart-title">时段分布</div>
+    <div class="chart-container">
+        <canvas id="hourlyStatsChart"></canvas>
+    </div>
+</div>
+
+<!-- 底部导航栏 -->
+<footer class="footer-nav">
+    <a href="index.html">
+        <i class="ri-add-circle-line"></i>
+        <span>提交</span>
+    </a>
+    <a href="cart.html">
+        <i class="ri-shopping-cart-line"></i>
+        <span>购物车</span>
+    </a>
+    <a href="requests.html">
+        <i class="ri-list-check-2"></i>
+        <span>任务</span>
+    </a>
+    <a href="results.html">
+        <i class="ri-file-list-3-line"></i>
+        <span>结果</span>
+    </a>
+    <a class="active" href="user.html">
+        <i class="ri-user-3-line"></i>
+        <span>我的</span>
+    </a>
+</footer>
+
+<script src="/js/user.js"></script>
+<script src="/js/statistics.js" defer></script>
+<script src="/js/chart.umd.min.js" defer></script>
+</body>
+</html>

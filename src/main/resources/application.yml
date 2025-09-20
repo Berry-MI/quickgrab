@@ -1,0 +1,45 @@
+#配置数据库的连接信息
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: a193652481376.
+#    password: root
+    url: jdbc:mysql://localhost:3306/grab_system_8082?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai
+#    url: jdbc:mysql://localhost:3306/grab_system?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai
+  jpa:
+    properties:
+      jakarta:
+        persistence:
+          sharedCache:
+            mode: ALL
+    open-in-view: false
+
+
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+  devtools:
+    restart:
+      enabled: true # 热部署生效
+      additional-paths: src/main/java # 设置重启目录
+      exclude: static/** # 设置classpath日录下的WEB-INF文件夹内容修改不重启
+
+mybatis:
+  mapper-locations: classpath*:mapper/*.xml
+  type-aliases-package: indi.wookat.quickgrab.pojo
+
+# 应用服务 WEB 访问端口
+server:
+  port: 8082
+  address: 0.0.0.0 # 允许局域网访问
+
+
+#nohup java -jar QuickGrabSystem-0.0.1-SNAPSHOT-8082.jar > output-8082.log 2>&1 &
+
+
+

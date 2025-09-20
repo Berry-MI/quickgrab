@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="indi.wookat.quickgrab.mapper.DevicesMapper">
+
+    <resultMap id="BaseResultMap" type="indi.wookat.quickgrab.entity.Devices">
+            <id property="id" column="id" jdbcType="INTEGER"/>
+            <result property="ipAddress" column="ip_address" jdbcType="VARCHAR"/>
+            <result property="maxConcurrent" column="max_concurrent" jdbcType="INTEGER"/>
+            <result property="priority" column="priority" jdbcType="INTEGER"/>
+            <result property="info" column="info" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,ip_address,max_concurrent,
+        priority,info
+    </sql>
+
+    <select id="selectByPrimaryKey" parameterType="java.lang.Long" resultMap="BaseResultMap">
+        select
+        <include refid="Base_Column_List" />
+        from devices
+        where  id = #{id,jdbcType=INTEGER} 
+    </select>
+
+    <delete id="deleteByPrimaryKey" parameterType="java.lang.Long">
+        delete from devices
+        where  id = #{id,jdbcType=INTEGER} 
+    </delete>
+    <insert id="insert" keyColumn="id" keyProperty="id" parameterType="indi.wookat.quickgrab.entity.Devices" useGeneratedKeys="true">
+        insert into devices
+        ( id,ip_address,max_concurrent
+        ,priority,info)
+        values (#{id,jdbcType=INTEGER},#{ipAddress,jdbcType=VARCHAR},#{maxConcurrent,jdbcType=INTEGER}
+        ,#{priority,jdbcType=INTEGER},#{info,jdbcType=VARCHAR})
+    </insert>
+    <insert id="insertSelective" keyColumn="id" keyProperty="id" parameterType="indi.wookat.quickgrab.entity.Devices" useGeneratedKeys="true">
+        insert into devices
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+                <if test="id != null">id,</if>
+                <if test="ipAddress != null">ip_address,</if>
+                <if test="maxConcurrent != null">max_concurrent,</if>
+                <if test="priority != null">priority,</if>
+                <if test="info != null">info,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+                <if test="id != null">#{id,jdbcType=INTEGER},</if>
+                <if test="ipAddress != null">#{ipAddress,jdbcType=VARCHAR},</if>
+                <if test="maxConcurrent != null">#{maxConcurrent,jdbcType=INTEGER},</if>
+                <if test="priority != null">#{priority,jdbcType=INTEGER},</if>
+                <if test="info != null">#{info,jdbcType=VARCHAR},</if>
+        </trim>
+    </insert>
+    <update id="updateByPrimaryKeySelective" parameterType="indi.wookat.quickgrab.entity.Devices">
+        update devices
+        <set>
+                <if test="ipAddress != null">
+                    ip_address = #{ipAddress,jdbcType=VARCHAR},
+                </if>
+                <if test="maxConcurrent != null">
+                    max_concurrent = #{maxConcurrent,jdbcType=INTEGER},
+                </if>
+                <if test="priority != null">
+                    priority = #{priority,jdbcType=INTEGER},
+                </if>
+                <if test="info != null">
+                    info = #{info,jdbcType=VARCHAR},
+                </if>
+        </set>
+        where   id = #{id,jdbcType=INTEGER} 
+    </update>
+    <update id="updateByPrimaryKey" parameterType="indi.wookat.quickgrab.entity.Devices">
+        update devices
+        set 
+            ip_address =  #{ipAddress,jdbcType=VARCHAR},
+            max_concurrent =  #{maxConcurrent,jdbcType=INTEGER},
+            priority =  #{priority,jdbcType=INTEGER},
+            info =  #{info,jdbcType=VARCHAR}
+        where   id = #{id,jdbcType=INTEGER} 
+    </update>
+</mapper>

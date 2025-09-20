@@ -1,10 +1,11 @@
 #pragma once
 
-#include \"quickgrab/proxy/ProxyPool.hpp\"
-#include \"quickgrab/repository/RequestsRepository.hpp\"
-#include \"quickgrab/repository/ResultsRepository.hpp\"
-#include \"quickgrab/util/HttpClient.hpp\"
-#include \"quickgrab/workflow/GrabWorkflow.hpp\"
+#include "quickgrab/proxy/ProxyPool.hpp"
+#include "quickgrab/repository/RequestsRepository.hpp"
+#include "quickgrab/repository/ResultsRepository.hpp"
+#include "quickgrab/service/MailService.hpp"
+#include "quickgrab/util/HttpClient.hpp"
+#include "quickgrab/workflow/GrabWorkflow.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/thread_pool.hpp>
@@ -21,7 +22,8 @@ public:
                 repository::RequestsRepository& requests,
                 repository::ResultsRepository& results,
                 util::HttpClient& client,
-                proxy::ProxyPool& proxies);
+                proxy::ProxyPool& proxies,
+                MailService& mailService);
 
     void processPending();
 
@@ -35,6 +37,7 @@ private:
     repository::ResultsRepository& results_;
     util::HttpClient& httpClient_;
     proxy::ProxyPool& proxyPool_;
+    MailService& mailService_;
     std::unique_ptr<workflow::GrabWorkflow> workflow_;
 };
 

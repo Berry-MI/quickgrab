@@ -13,13 +13,15 @@ GrabService::GrabService(boost::asio::io_context& io,
                          repository::RequestsRepository& requests,
                          repository::ResultsRepository& results,
                          util::HttpClient& client,
-                         proxy::ProxyPool& proxies)
+                         proxy::ProxyPool& proxies,
+                         MailService& mailService)
     : io_(io)
     , worker_(worker)
     , requests_(requests)
     , results_(results)
     , httpClient_(client)
     , proxyPool_(proxies)
+    , mailService_(mailService)
     , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_)) {}
 
 void GrabService::processPending() {
@@ -45,23 +47,40 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
     stored.requestId = request.id;
     stored.createdAt = std::chrono::system_clock::now();
     stored.status = std::to_string(result.statusCode);
-    boost::json::object payload = result.payload.is_object() ? result.payload.as_object() : boost::json::object{};
-    payload["message"] = result.message;
+    boost::json::object payload;
     payload["success"] = result.success;
+    payload["shouldContinue"] = result.shouldContinue;
+    payload["shouldUpdate"] = result.shouldUpdate;
+    payload["statusCode"] = result.statusCode;
+    payload["message"] = result.message;
+    payload["attempts"] = result.attempts;
+    if (!result.error.empty()) {
+        payload["error"] = result.error;
+    }
+    if (!result.response.is_null()) {
+        payload["response"] = result.response;
+    }
     stored.payload = std::move(payload);
 
     if (result.success) {
         util::log(util::LogLevel::info, "抢购完成 id=" + std::to_string(request.id));
         requests_.updateStatus(request.id, 1);
-    } else if (result.shouldContinue) {
+        results_.insertResult(stored);
+        mailService_.sendSuccessEmail(request, result);
+        return;
+    }
+
+    if (result.shouldContinue || result.shouldUpdate) {
         util::log(util::LogLevel::warn, "抢购请求需继续 id=" + std::to_string(request.id));
         requests_.updateStatus(request.id, 4);
     } else {
-        util::log(util::LogLevel::error, "抢购失败 id=" + std::to_string(request.id) + " 原因=" + result.message);
+        util::log(util::LogLevel::error,
+                  "抢购失败 id=" + std::to_string(request.id) + " 原因=" + (!result.message.empty() ? result.message : result.error));
         requests_.updateStatus(request.id, 3);
     }
 
     results_.insertResult(stored);
+    mailService_.sendFailureEmail(request, result);
 }
 
 } // namespace quickgrab::service

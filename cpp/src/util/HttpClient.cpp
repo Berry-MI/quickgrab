@@ -211,21 +211,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
     return response;
 }
 
-    boost::beast::tcp_stream stream(io_);
-    stream.expires_after(timeout);
-    stream.connect(results);
-    boost::beast::http::write(stream, request);
-    boost::beast::flat_buffer buffer;
-    HttpResponse response;
-    boost::beast::http::read(stream, buffer, response);
-    boost::system::error_code ec;
-    stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-    if (ec && ec != boost::asio::error::not_connected) {
-        throw boost::system::system_error(ec);
-    }
-    return response;
-}
-
 HttpClient::HttpResponse HttpClient::fetch(const std::string& method,
                                            const std::string& url,
                                            const std::vector<Header>& headers,

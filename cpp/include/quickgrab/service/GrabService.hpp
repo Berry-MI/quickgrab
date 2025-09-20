@@ -9,8 +9,10 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/thread_pool.hpp>
+#include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace quickgrab::service {
@@ -28,8 +30,12 @@ public:
     void processPending();
 
 private:
-    void executeRequest(const model::Request& request);
+    void executeRequest(model::Request request);
+    void executeGrab(model::Request request);
     void handleResult(const model::Request& request, const workflow::GrabResult& result);
+    long computeAdjustedLatency(const model::Request& request) const;
+    long computeProcessingTime(const model::Request& request) const;
+    long computeSchedulingTime() const;
 
     boost::asio::io_context& io_;
     boost::asio::thread_pool& worker_;
@@ -39,6 +45,12 @@ private:
     proxy::ProxyPool& proxyPool_;
     MailService& mailService_;
     std::unique_ptr<workflow::GrabWorkflow> workflow_;
+    std::atomic<long> adjustedFactor_;
+    long processingTime_;
+    std::chrono::system_clock::time_point updateTime_;
+    std::chrono::system_clock::time_point prestartTime_;
+    long schedulingTime_;
+    mutable std::mutex metricsMutex_;
 };
 
 } // namespace quickgrab::service

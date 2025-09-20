@@ -134,6 +134,28 @@ void GrabWorkflow::prepareContext(const model::Request& request, GrabContext& ct
     ctx.quickMode = tryGetBool(ctx.extension, "quickMode", false);
     ctx.steadyOrder = tryGetBool(ctx.extension, "steadyOrder", false);
     ctx.autoPick = tryGetBool(ctx.extension, "autoPick", false);
+    if (auto metric = ctx.extension.if_contains("__adjustedFactor")) {
+        if (metric->is_int64()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_int64());
+        } else if (metric->is_double()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_double());
+        }
+    } else if (auto metric = ctx.extension.if_contains("adjustedFactor")) {
+        if (metric->is_int64()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_int64());
+        }
+    }
+    if (auto metric = ctx.extension.if_contains("__processingTime")) {
+        if (metric->is_int64()) {
+            ctx.processingTime = static_cast<long>(metric->as_int64());
+        } else if (metric->is_double()) {
+            ctx.processingTime = static_cast<long>(metric->as_double());
+        }
+    } else if (auto metric = ctx.extension.if_contains("processingTime")) {
+        if (metric->is_int64()) {
+            ctx.processingTime = static_cast<long>(metric->as_int64());
+        }
+    }
 }
 
 GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::object& payload) {

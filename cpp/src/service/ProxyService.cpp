@@ -16,12 +16,20 @@ void ProxyService::scheduleRefresh(std::function<std::vector<proxy::ProxyEndpoin
     doRefresh();
 }
 
-std::vector<proxy::ProxyEndpoint> ProxyService::listProxies() const {
-    // For brevity, expose a copy via callback. In production this should snapshot in a thread-safe way.
-    if (refreshCallback_) {
-        return refreshCallback_();
+void ProxyService::addProxies(std::vector<proxy::ProxyEndpoint> proxies) {
+    if (proxies.empty()) {
+        return;
     }
-    return {};
+    {
+        std::scoped_lock lock(snapshotMutex_);
+        snapshot_.insert(snapshot_.end(), proxies.begin(), proxies.end());
+    }
+    pool_.hydrate(std::move(proxies));
+}
+
+std::vector<proxy::ProxyEndpoint> ProxyService::listProxies() const {
+    std::scoped_lock lock(snapshotMutex_);
+    return snapshot_;
 }
 
 void ProxyService::doRefresh() {
@@ -29,6 +37,10 @@ void ProxyService::doRefresh() {
         return;
     }
     auto proxies = refreshCallback_();
+    {
+        std::scoped_lock lock(snapshotMutex_);
+        snapshot_ = proxies;
+    }
     pool_.hydrate(std::move(proxies));
     timer_->expires_after(cadence_);
     timer_->async_wait([this](const boost::system::error_code& ec) {

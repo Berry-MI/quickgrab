@@ -26,15 +26,14 @@ GrabService::GrabService(boost::asio::io_context& io,
     , httpClient_(client)
     , proxyPool_(proxies)
     , mailService_(mailService)
-codex/translate-java-code-to-c++-5qea89
+
     , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_))
     , adjustedFactor_(10)
     , processingTime_(19)
     , updateTime_(std::chrono::system_clock::now())
     , prestartTime_(std::chrono::system_clock::now())
     , schedulingTime_(computeSchedulingTime()) {}
-//=======
-    , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_)) {}
+
 
 
 void GrabService::processPending() {
@@ -136,7 +135,6 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
             util::log(util::LogLevel::warn,
                       "删除请求失败 id=" + std::to_string(request.id) + " error=" + ex.what());
         }
-//=======
 
         return;
     }
@@ -206,7 +204,6 @@ long GrabService::computeProcessingTime(const model::Request& request) const {
 
 long GrabService::computeSchedulingTime() const {
     return 2;
-//=======
 
 }
 

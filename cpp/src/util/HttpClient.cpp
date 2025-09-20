@@ -8,11 +8,13 @@
 #include <boost/beast/ssl.hpp>
 #include <openssl/ssl.h>
 #include <boost/beast/version.hpp>
-#include <iterator>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 
 
 namespace quickgrab::util {
@@ -52,11 +54,6 @@ ParsedUrl parseUrl(const std::string& url) {
         parsed.target = "/";
     }
     return parsed;
-}
-
-std::string hostWithoutPort(const std::string& host) {
-    auto colon = host.find(':');
-    return colon == std::string::npos ? host : host.substr(0, colon);
 }
 
 bool isRedirect(boost::beast::http::status status) {
@@ -106,6 +103,48 @@ boost::beast::http::verb toVerb(const std::string& method) {
     if (upper == "OPTIONS") return boost::beast::http::verb::options;
     if (upper == "TRACE") return boost::beast::http::verb::trace;
     throw std::invalid_argument("Unsupported HTTP method: " + method);
+}
+
+std::string base64Encode(std::string_view input) {
+    static constexpr char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((input.size() + 2) / 3) * 4);
+
+    std::uint32_t value = 0;
+    int bitCount = -6;
+    for (unsigned char c : input) {
+        value = (value << 8) | c;
+        bitCount += 8;
+        while (bitCount >= 0) {
+            output.push_back(alphabet[(value >> bitCount) & 0x3F]);
+            bitCount -= 6;
+        }
+    }
+
+    if (bitCount > -6) {
+        output.push_back(alphabet[((value << 8) >> (bitCount + 8)) & 0x3F]);
+    }
+    while (output.size() % 4 != 0) {
+        output.push_back('=');
+    }
+    return output;
+}
+
+std::string proxyAuthorization(const proxy::ProxyEndpoint& proxy) {
+    if (proxy.username.empty() && proxy.password.empty()) {
+        return {};
+    }
+    std::string credentials = proxy.username + ":" + proxy.password;
+    return "Basic " + base64Encode(credentials);
+}
+
+std::string authorityFrom(const ParsedUrl& parsed) {
+    if ((parsed.scheme == "http" && parsed.port == "80") ||
+        (parsed.scheme == "https" && parsed.port == "443")) {
+        return parsed.host;
+    }
+    return parsed.host + ":" + parsed.port;
 }
 
 } // namespace
@@ -159,56 +198,138 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             proxy = proxyPool_.acquire(affinityKey);
             if (!proxy) {
                 util::log(util::LogLevel::warn, "No proxy available for affinity key " + affinityKey);
-            } else {
-                util::log(util::LogLevel::warn, "Proxy tunnelling not yet implemented; falling back to direct connection");
-                proxyPool_.reportSuccess(affinityKey, *proxy);
-                proxy.reset();
             }
         }
     }
+    try {
+        if (proxy) {
+            boost::asio::ip::tcp::resolver resolver(io_);
+            auto proxyResults = resolver.resolve(proxy->host, std::to_string(proxy->port));
 
-    boost::asio::ip::tcp::resolver resolver(io_);
-    auto results = resolver.resolve(parsed.host, parsed.port);
+            if (parsed.scheme == "https") {
+                boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
+                auto& lowest = boost::beast::get_lowest_layer(stream);
+                lowest.expires_after(timeout);
+                lowest.connect(proxyResults);
 
-    if (parsed.scheme == "https") {
-        boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
-        if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
-            throw std::runtime_error("Failed to set SNI host name");
+                boost::beast::http::request<boost::beast::http::empty_body> connectRequest{
+                    boost::beast::http::verb::connect, authorityFrom(parsed), kHttpVersion};
+                connectRequest.set(boost::beast::http::field::host, authorityFrom(parsed));
+                if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
+                    connectRequest.set("Proxy-Authorization", auth);
+                }
+
+                boost::beast::http::write(lowest, connectRequest);
+                boost::beast::flat_buffer connectBuffer;
+                boost::beast::http::response<boost::beast::http::empty_body> connectResponse;
+                boost::beast::http::read(lowest, connectBuffer, connectResponse);
+                if (connectResponse.result() != boost::beast::http::status::ok) {
+                    throw std::runtime_error("Proxy CONNECT failed with status " +
+                                             std::to_string(connectResponse.result_int()));
+                }
+
+                if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
+                    throw std::runtime_error("Failed to set SNI host name");
+                }
+
+                lowest.expires_after(timeout);
+                stream.handshake(boost::asio::ssl::stream_base::client);
+
+                boost::beast::http::write(stream, request);
+                boost::beast::flat_buffer buffer;
+                HttpResponse response;
+                boost::beast::http::read(stream, buffer, response);
+
+                boost::system::error_code ec;
+                stream.shutdown(ec);
+                if (ec == boost::asio::error::eof || ec == boost::asio::ssl::error::stream_truncated) {
+                    ec = {};
+                }
+                if (ec) {
+                    throw boost::system::system_error(ec);
+                }
+
+                proxyPool_.reportSuccess(affinityKey, *proxy);
+                return response;
+            }
+
+            boost::beast::tcp_stream stream(io_);
+            stream.expires_after(timeout);
+            stream.connect(proxyResults);
+
+            HttpRequest proxiedRequest = request;
+            proxiedRequest.target(parsed.scheme + "://" + authorityFrom(parsed) + parsed.target);
+            if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
+                proxiedRequest.set("Proxy-Authorization", auth);
+            }
+
+            boost::beast::http::write(stream, proxiedRequest);
+            boost::beast::flat_buffer buffer;
+            HttpResponse response;
+            boost::beast::http::read(stream, buffer, response);
+            boost::system::error_code ec;
+            stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+            if (ec && ec != boost::asio::error::not_connected) {
+                throw boost::system::system_error(ec);
+            }
+
+            if (response.result() == boost::beast::http::status::proxy_authentication_required) {
+                throw std::runtime_error("Proxy authentication required");
+            }
+
+            proxyPool_.reportSuccess(affinityKey, *proxy);
+            return response;
         }
-        auto& lowest = boost::beast::get_lowest_layer(stream);
-        lowest.expires_after(timeout);
-        lowest.connect(results);
-        stream.handshake(boost::asio::ssl::stream_base::client);
 
+        boost::asio::ip::tcp::resolver resolver(io_);
+        auto results = resolver.resolve(parsed.host, parsed.port);
+
+        if (parsed.scheme == "https") {
+            boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
+            if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
+                throw std::runtime_error("Failed to set SNI host name");
+            }
+            auto& lowest = boost::beast::get_lowest_layer(stream);
+            lowest.expires_after(timeout);
+            lowest.connect(results);
+            stream.handshake(boost::asio::ssl::stream_base::client);
+
+            boost::beast::http::write(stream, request);
+            boost::beast::flat_buffer buffer;
+            HttpResponse response;
+            boost::beast::http::read(stream, buffer, response);
+
+            boost::system::error_code ec;
+            stream.shutdown(ec);
+            if (ec == boost::asio::error::eof || ec == boost::asio::ssl::error::stream_truncated) {
+                ec = {};
+            }
+            if (ec) {
+                throw boost::system::system_error(ec);
+            }
+            return response;
+        }
+
+        boost::beast::tcp_stream stream(io_);
+        stream.expires_after(timeout);
+        stream.connect(results);
         boost::beast::http::write(stream, request);
         boost::beast::flat_buffer buffer;
         HttpResponse response;
         boost::beast::http::read(stream, buffer, response);
-
         boost::system::error_code ec;
-        stream.shutdown(ec);
-        if (ec == boost::asio::error::eof || ec == boost::asio::ssl::error::stream_truncated) {
-            ec = {};
-        }
-        if (ec) {
+        stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        if (ec && ec != boost::asio::error::not_connected) {
             throw boost::system::system_error(ec);
         }
         return response;
+    } catch (...) {
+        if (proxy) {
+            proxyPool_.reportFailure(affinityKey, *proxy);
+        }
+        throw;
     }
 
-    boost::beast::tcp_stream stream(io_);
-    stream.expires_after(timeout);
-    stream.connect(results);
-    boost::beast::http::write(stream, request);
-    boost::beast::flat_buffer buffer;
-    HttpResponse response;
-    boost::beast::http::read(stream, buffer, response);
-    boost::system::error_code ec;
-    stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-    if (ec && ec != boost::asio::error::not_connected) {
-        throw boost::system::system_error(ec);
-    }
-    return response;
 }
 
 HttpClient::HttpResponse HttpClient::fetch(const std::string& method,

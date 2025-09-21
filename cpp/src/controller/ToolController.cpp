@@ -203,10 +203,21 @@ bool looksLikeValidCookie(const std::string& cookies) {
 } // namespace
 
 void ToolController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("POST", "/getNote", [this](auto& ctx) { handleGetNote(ctx); });
-    router.addRoute("POST", "/fetchItemInfo", [this](auto& ctx) { handleFetchItemInfo(ctx); });
-    router.addRoute("GET", "/checkCookiesValidity", [this](auto& ctx) { handleCheckCookies(ctx); });
-    router.addRoute("POST", "/checkLatency", [this](auto& ctx) { handleCheckLatency(ctx); });
+    auto bindGetNote = [this](auto& ctx) { handleGetNote(ctx); };
+    router.addRoute("POST", "/getNote", bindGetNote);
+    router.addRoute("POST", "/api/getNote", bindGetNote);
+
+    auto bindFetchItemInfo = [this](auto& ctx) { handleFetchItemInfo(ctx); };
+    router.addRoute("POST", "/fetchItemInfo", bindFetchItemInfo);
+    router.addRoute("POST", "/api/fetchItemInfo", bindFetchItemInfo);
+
+    auto bindCheckCookies = [this](auto& ctx) { handleCheckCookies(ctx); };
+    router.addRoute("GET", "/checkCookiesValidity", bindCheckCookies);
+    router.addRoute("GET", "/api/checkCookiesValidity", bindCheckCookies);
+
+    auto bindCheckLatency = [this](auto& ctx) { handleCheckLatency(ctx); };
+    router.addRoute("POST", "/checkLatency", bindCheckLatency);
+    router.addRoute("POST", "/api/checkLatency", bindCheckLatency);
 }
 
 void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {

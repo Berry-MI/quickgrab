@@ -11,6 +11,8 @@
 
 #include <mysqlx/xdevapi.h>
 
+#include <mysqlx/xdevapi.h>
+
 #include <optional>
 #include <string>
 #include <string_view>

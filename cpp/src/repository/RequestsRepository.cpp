@@ -10,9 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-
 #include <ctime>
-
 
 namespace quickgrab::repository {
 namespace {
@@ -37,14 +35,11 @@ std::chrono::system_clock::time_point parseDateTimeValue(const mysqlx::Value& va
         return parseDateTimeString(value.get<std::string>());
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
-
         return std::chrono::system_clock::now();
     }
 }
 
-
 std::string readString(const mysqlx::Value& value) {
-
     if (value.isNull()) {
         return {};
     }
@@ -56,9 +51,7 @@ std::string readString(const mysqlx::Value& value) {
     }
 }
 
-
 double readDouble(const mysqlx::Value& value) {
-
     if (value.isNull()) {
         return 0.0;
     }
@@ -70,9 +63,7 @@ double readDouble(const mysqlx::Value& value) {
     }
 }
 
-
 boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string& column) {
-
     if (value.isNull()) {
         return boost::json::object{};
     }
@@ -82,7 +73,6 @@ boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string
         util::log(util::LogLevel::warn, "JSON parse failed on column " + column + ": " + ex.what());
         return boost::json::object{};
     }
-
 }
 
 std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
@@ -96,16 +86,13 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
-
 }
 } // namespace
 
 RequestsRepository::RequestsRepository(MySqlConnectionPool& pool)
     : pool_(pool) {}
 
-
 model::Request RequestsRepository::mapRow(mysqlx::Row row) {
-
     std::size_t index = 0;
     auto next = [&row, &index]() -> mysqlx::Value { return row[index++]; };
 
@@ -113,7 +100,6 @@ model::Request RequestsRepository::mapRow(mysqlx::Row row) {
     request.id = next().get<int>();
     request.deviceId = next().get<int>();
     request.buyerId = next().get<int>();
-
     auto value = next();
     request.threadId = readString(value);
     value = next();
@@ -136,13 +122,11 @@ model::Request RequestsRepository::mapRow(mysqlx::Row row) {
     request.startTime = parseDateTimeValue(value);
     value = next();
     request.endTime = parseDateTimeValue(value);
-
     request.quantity = next().get<int>();
     request.delay = next().get<int>();
     request.frequency = next().get<int>();
     request.type = next().get<int>();
     request.status = next().get<int>();
-
     value = next();
     request.orderParameters = parseJsonColumn(value, "order_parameters");
     value = next();
@@ -151,7 +135,6 @@ model::Request RequestsRepository::mapRow(mysqlx::Row row) {
     request.estimatedEarnings = readDouble(value);
     value = next();
     request.extension = parseJsonColumn(value, "extension");
-
     return request;
 }
 
@@ -193,9 +176,7 @@ void RequestsRepository::updateStatus(int requestId, int status) {
         mysqlx::Table table = schema.getTable("requests");
         table.update()
             .set("status", status)
-
             .set("updated_at", formatTimestamp(std::chrono::system_clock::now()))
-
             .where("id = :id")
             .bind("id", requestId)
             .execute();
@@ -207,7 +188,6 @@ void RequestsRepository::updateStatus(int requestId, int status) {
 
 void RequestsRepository::updateThreadId(int requestId, const std::string& threadId) {
     auto session = pool_.acquire();
-
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
@@ -228,14 +208,12 @@ void RequestsRepository::deleteById(int requestId) {
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
-
         table.remove()
             .where("id = :id")
             .bind("id", requestId)
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Delete request failed: "} + err.what());
-
         throw;
     }
 }

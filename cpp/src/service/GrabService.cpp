@@ -26,6 +26,12 @@ GrabService::GrabService(boost::asio::io_context& io,
     , httpClient_(client)
     , proxyPool_(proxies)
     , mailService_(mailService)
+    , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_))
+    , adjustedFactor_(10)
+    , processingTime_(19)
+    , updateTime_(std::chrono::system_clock::now())
+    , prestartTime_(std::chrono::system_clock::now())
+    , schedulingTime_(computeSchedulingTime()) {}
 
     , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_))
     , adjustedFactor_(10)
@@ -127,14 +133,12 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
         requests_.updateStatus(request.id, 1);
         results_.insertResult(stored);
         mailService_.sendSuccessEmail(request, result);
-
         try {
             requests_.deleteById(request.id);
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn,
                       "删除请求失败 id=" + std::to_string(request.id) + " error=" + ex.what());
         }
-
         return;
     }
 
@@ -149,7 +153,6 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
 
     results_.insertResult(stored);
     mailService_.sendFailureEmail(request, result);
-
     if (!result.shouldContinue && !result.shouldUpdate) {
         try {
             requests_.deleteById(request.id);
@@ -203,7 +206,6 @@ long GrabService::computeProcessingTime(const model::Request& request) const {
 
 long GrabService::computeSchedulingTime() const {
     return 2;
-
 }
 
 } // namespace quickgrab::service

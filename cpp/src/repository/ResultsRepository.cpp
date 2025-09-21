@@ -7,12 +7,10 @@
 #include <chrono>
 #include <exception>
 #include <iomanip>
-
 #include <optional>
 #include <sstream>
 #include <string>
 #include <ctime>
-
 
 namespace quickgrab::repository {
 namespace {
@@ -28,6 +26,7 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
 }
+} // namespace
 
 } // namespace
 
@@ -53,7 +52,6 @@ void ResultsRepository::insertResult(const model::Result& result) {
 }
 
 std::optional<model::Result> ResultsRepository::findById(int resultId) {
-
     auto session = pool_.acquire();
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
@@ -69,13 +67,11 @@ std::optional<model::Result> ResultsRepository::findById(int resultId) {
         return std::nullopt;
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Find result failed: "} + err.what());
-
         throw;
     }
 }
 
 void ResultsRepository::deleteById(int resultId) {
-
     auto session = pool_.acquire();
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
@@ -123,7 +119,6 @@ model::Result ResultsRepository::mapRow(mysqlx::Row row) {
     }
     return result;
 }
-
 
 std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const std::string& value) {
     if (value.empty()) {

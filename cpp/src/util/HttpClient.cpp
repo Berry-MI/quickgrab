@@ -249,7 +249,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     throw boost::system::system_error(ec);
                 }
 
-
                 proxyPool_.reportSuccess(affinityKey, *proxy);
                 return response;
             }
@@ -282,7 +281,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             return response;
         }
 
-
         boost::asio::ip::tcp::resolver resolver(io_);
         auto results = resolver.resolve(parsed.host, parsed.port);
 
@@ -312,7 +310,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             return response;
         }
 
-
         boost::beast::tcp_stream stream(io_);
         stream.expires_after(timeout);
         stream.connect(results);
@@ -332,7 +329,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
         }
         throw;
     }
-
 }
 
 HttpClient::HttpResponse HttpClient::fetch(const std::string& method,

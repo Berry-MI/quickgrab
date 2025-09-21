@@ -28,6 +28,8 @@ cmake --build build
 - proxy/ProxyPool：代理池，提供粘滞分配、失败退避、快照导出。
 - repository/：MySqlConnectionPool、RequestsRepository、ResultsRepository 通过 MySQL Connector/C++ X DevAPI 读取/写入表数据。
 默认在 cpp/data/database.json 加载数据库连接（如缺失则使用 127.0.0.1:33060/grab_system）；可通过环境变量 QUICKGRAB_DB_HOST/PORT/USER/PASSWORD/NAME/POOL 覆盖。
+
+可选在 cpp/data/kdlproxy.json 配置快代理（Kuaidaili）拉取参数：secretId/signature/username/password/count/refreshMinutes，或通过环境变量 QUICKGRAB_PROXY_ENDPOINT/SECRET_ID/SIGNATURE/USERNAME/PASSWORD/BATCH/REFRESH_MINUTES 覆盖。启用后服务将按配置周期调用 `https://dps.kdlapi.com/api/getdps/` 拉取代理列表并注入代理池，业务接口仍可通过 `useProxy` 参数自由选择是否走代理。
 | RequestsMapper.java | repository/RequestsRepository（基于 MySQL） |
 | ResultsMapper.java | repository/ResultsRepository |
 

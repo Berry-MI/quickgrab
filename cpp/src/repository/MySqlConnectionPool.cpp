@@ -12,7 +12,6 @@ namespace quickgrab::repository {
 namespace {
 std::string normalizeHost(const std::string& host) {
     return host.empty() ? std::string{"127.0.0.1"} : host;
-
 }
 } // namespace
 
@@ -31,7 +30,6 @@ MySqlConnectionPool::MySqlConnectionPool(DatabaseConfig config)
 
 std::unique_ptr<mysqlx::Session> MySqlConnectionPool::createSession() {
     try {
-
         auto session = std::make_unique<mysqlx::Session>(
             mysqlx::SessionOption::HOST, normalizeHost(config_.host),
             mysqlx::SessionOption::PORT, static_cast<unsigned int>(config_.port),
@@ -43,7 +41,6 @@ std::unique_ptr<mysqlx::Session> MySqlConnectionPool::createSession() {
         if (!config_.database.empty()) {
             session->sql("USE `" + config_.database + "`").execute();
         }
-
         return session;
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Create MySQL session failed: "} + err.what());
@@ -75,9 +72,7 @@ std::shared_ptr<mysqlx::Session> MySqlConnectionPool::acquire() {
 
 void MySqlConnectionPool::release(mysqlx::Session* session) {
     std::unique_ptr<mysqlx::Session> holder(session);
-
     bool healthy = static_cast<bool>(holder);
-
 
     std::unique_lock<std::mutex> lock(mutex_);
     if (healthy) {

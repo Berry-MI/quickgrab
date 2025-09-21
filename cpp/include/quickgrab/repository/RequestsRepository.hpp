@@ -5,6 +5,8 @@
 
 #include <mysqlx/xdevapi.h>
 
+#include <mysqlx/xdevapi.h>
+
 #include <string>
 #include <vector>
 

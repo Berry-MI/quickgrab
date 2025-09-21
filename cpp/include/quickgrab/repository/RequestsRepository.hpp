@@ -3,10 +3,11 @@
 #include \"quickgrab/model/Request.hpp\"
 #include \"quickgrab/repository/MySqlConnectionPool.hpp\"
 
+#include <string>
 #include <vector>
 
-namespace sql {
-class ResultSet;
+namespace mysqlx {
+class Row;
 }
 
 namespace quickgrab::repository {
@@ -17,9 +18,11 @@ public:
 
     std::vector<model::Request> findPending(int limit);
     void updateStatus(int requestId, int status);
+    void updateThreadId(int requestId, const std::string& threadId);
+    void deleteById(int requestId);
 
 private:
-    model::Request mapRow(sql::ResultSet& rs);
+    model::Request mapRow(const mysqlx::Row& row);
 
     MySqlConnectionPool& pool_;
 };

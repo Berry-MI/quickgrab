@@ -14,6 +14,7 @@
 #include "quickgrab/server/HttpServer.hpp"
 #include "quickgrab/server/Router.hpp"
 #include "quickgrab/service/GrabService.hpp"
+#include "quickgrab/service/MailService.hpp"
 #include "quickgrab/service/ProxyService.hpp"
 #include "quickgrab/service/QueryService.hpp"
 #include "quickgrab/util/HttpClient.hpp"
@@ -43,7 +44,7 @@ using quickgrab::proxy::ProxyEndpoint;
 repository::DatabaseConfig loadDatabaseConfig(const std::filesystem::path& path) {
     repository::DatabaseConfig config;
     config.host = "127.0.0.1";
-    config.port = 3306;
+    config.port = 33060;
     config.user = "root";
     config.password.clear();
     config.database = "grab_system";
@@ -169,7 +170,20 @@ int main(int /*argc*/, char** /*argv*/) {
     repository::RequestsRepository requests{connectionPool};
     repository::ResultsRepository results{connectionPool};
 
-    service::GrabService grabService{io, workerPool, requests, results, httpClient, proxyPool};
+    service::MailService::Config mailConfig;
+    if (const char* from = std::getenv("QUICKGRAB_MAIL_FROM")) {
+        mailConfig.fromEmail = from;
+    }
+    if (const char* sender = std::getenv("QUICKGRAB_MAIL_SENDER")) {
+        mailConfig.senderName = sender;
+    }
+    if (const char* spool = std::getenv("QUICKGRAB_MAIL_OUTBOX")) {
+        mailConfig.spoolDirectory = spool;
+    }
+
+    service::MailService mailService{std::move(mailConfig)};
+
+    service::GrabService grabService{io, workerPool, requests, results, httpClient, proxyPool, mailService};
     service::ProxyService proxyService{io, proxyPool};
     service::QueryService queryService{requests, results};
 

@@ -1,6 +1,6 @@
-#include \"quickgrab/controller/ProxyController.hpp\"
-#include \"quickgrab/util/JsonUtil.hpp\"
-#include \"quickgrab/util/Logging.hpp\"
+#include "quickgrab/controller/ProxyController.hpp"
+#include "quickgrab/util/JsonUtil.hpp"
+#include "quickgrab/util/Logging.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
@@ -20,8 +20,15 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-constexpr char kDesktopUA[] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
-constexpr char kMobileUA[] = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+
+namespace quickgrab::controller {
+
+namespace {
+
+constexpr char kDesktopUA[] =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
+constexpr char kMobileUA[] =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 
 std::string urlDecode(const std::string& value) {
     std::string result;
@@ -961,31 +968,3 @@ void ProxyController::handleHydrate(quickgrab::server::RequestContext& ctx) {
 }
 
 } // namespace quickgrab::controller
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

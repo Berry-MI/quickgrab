@@ -2,13 +2,13 @@
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
+
 #include <mysqlx/xdevapi.h>
 
 
 #include <chrono>
 #include <exception>
 #include <iomanip>
-
 
 #include <optional>
 #include <sstream>
@@ -99,7 +99,6 @@ void ResultsRepository::deleteById(int resultId) {
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Delete result failed: "} + err.what());
-
         throw;
     }
 }
@@ -107,6 +106,7 @@ void ResultsRepository::deleteById(int resultId) {
 model::Result ResultsRepository::mapRow(const mysqlx::Row& row) {
     std::size_t index = 0;
     auto next = [&row, &index]() -> mysqlx::Value { return row[index++]; };
+
 
     model::Result result{};
     result.id = next().get<int>();
@@ -151,4 +151,4 @@ std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const st
     return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
-
+} // namespace quickgrab::repository

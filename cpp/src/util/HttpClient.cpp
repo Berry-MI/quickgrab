@@ -258,7 +258,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             stream.expires_after(timeout);
             stream.connect(proxyResults);
 
-
             HttpRequest proxiedRequest = request;
             proxiedRequest.target(parsed.scheme + "://" + authorityFrom(parsed) + parsed.target);
             if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
@@ -282,6 +281,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
             proxyPool_.reportSuccess(affinityKey, *proxy);
             return response;
+
         }
 
         boost::asio::ip::tcp::resolver resolver(io_);
@@ -312,6 +312,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             }
             return response;
         }
+
 
         boost::beast::tcp_stream stream(io_);
         stream.expires_after(timeout);

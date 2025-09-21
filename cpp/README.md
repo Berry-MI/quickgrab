@@ -47,8 +47,10 @@ cmake --build build
 | GrabService.java | service/GrabService + workflow/GrabWorkflow + util/HttpClient |
 | ProxyController.java | controller/ProxyController |
 | QueryController.java | controller/QueryController |
-| RequestsMapper.java | epository/RequestsRepository（基于 MySQL） |
-| ResultsMapper.java | epository/ResultsRepository |
+| RequestsMapper.java | 
+epository/RequestsRepository（基于 MySQL） |
+| ResultsMapper.java | 
+epository/ResultsRepository |
 | NetworkUtil.java | util/HttpClient、workflow/GrabWorkflow、proxy/ProxyPool |
 | GrabSchedule.java | GrabWorkflow + oost::asio::steady_timer 调度 |
 

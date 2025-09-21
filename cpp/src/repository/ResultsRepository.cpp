@@ -28,9 +28,6 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
 }
 } // namespace
 
-} // namespace
-
-
 ResultsRepository::ResultsRepository(MySqlConnectionPool& pool)
     : pool_(pool) {}
 

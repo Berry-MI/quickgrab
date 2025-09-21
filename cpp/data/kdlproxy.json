@@ -1,0 +1,9 @@
+{
+  "endpoint": "https://dps.kdlapi.com/api/getdps/",
+  "secretId": "osynxu06lpvntz4slqkh",
+  "signature": "eaf6166mo6rkurfle3gu6m2xt9e0j4ss",
+  "username": "d2856638485",
+  "password": "guc3dp1s",
+  "count": 5,
+  "refreshMinutes": 3
+}

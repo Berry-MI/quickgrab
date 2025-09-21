@@ -433,7 +433,7 @@ int main(int /*argc*/, char** /*argv*/) {
         proxyService.addProxies(std::move(initialProxies));
     }
 
-    if (auto kdlConfig = loadKdlProxyConfig("data/kdlproxy.json")) {
+    if (auto kdlConfig = loadKdlProxyConfig("../../data/kdlproxy.json")) {
         util::log(util::LogLevel::info,
                   "启用 KDL 代理池刷新，每 " +
                       std::to_string(kdlConfig->refreshInterval.count()) +

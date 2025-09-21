@@ -33,12 +33,6 @@ GrabService::GrabService(boost::asio::io_context& io,
     , prestartTime_(std::chrono::system_clock::now())
     , schedulingTime_(computeSchedulingTime()) {}
 
-    , workflow_(std::make_unique<workflow::GrabWorkflow>(io_, worker_, httpClient_, proxyPool_))
-    , adjustedFactor_(10)
-    , processingTime_(19)
-    , updateTime_(std::chrono::system_clock::now())
-    , prestartTime_(std::chrono::system_clock::now())
-    , schedulingTime_(computeSchedulingTime()) {}
 
 
 void GrabService::processPending() {

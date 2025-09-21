@@ -1,7 +1,7 @@
 #pragma once
 
-#include \"quickgrab/model/Request.hpp\"
-#include \"quickgrab/repository/MySqlConnectionPool.hpp\"
+#include "quickgrab/model/Request.hpp"
+#include "quickgrab/repository/MySqlConnectionPool.hpp"
 
 #include <string>
 #include <vector>

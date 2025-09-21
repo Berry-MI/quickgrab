@@ -714,7 +714,9 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetListCart(quickgrab::server::RequestContext& ctx) {
+}
+
+void ProxyController::handleGetListCart(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -760,7 +762,8 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetUserInfo(quickgrab::server::RequestContext& ctx) {
+}
+void ProxyController::handleGetUserInfo(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -804,7 +807,9 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetAddOrderData(quickgrab::server::RequestContext& ctx) {
+}
+
+void ProxyController::handleGetAddOrderData(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -866,7 +871,8 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleProxyRequest(quickgrab::server::RequestContext& ctx) {
+}
+void ProxyController::handleProxyRequest(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 

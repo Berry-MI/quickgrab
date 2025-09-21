@@ -1,6 +1,6 @@
-#include \"quickgrab/server/HttpServer.hpp\"
-#include \"quickgrab/server/Router.hpp\"
-#include \"quickgrab/server/RequestContext.hpp\"
+#include "quickgrab/server/HttpServer.hpp"
+#include "quickgrab/server/Router.hpp"
+#include "quickgrab/server/RequestContext.hpp"
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
@@ -53,8 +53,8 @@ private:
 
         if (!handler) {
             ctx.response.result(boost::beast::http::status::not_found);
-            ctx.response.set(boost::beast::http::field::content_type, \"application/json\");
-            ctx.response.body() = \"{\\\"error\\\":\\\"not_found\\\"}\";
+            ctx.response.set(boost::beast::http::field::content_type, "application/json");
+            ctx.response.body() = "{\\\"error\\\":\\\"not_found\\\"}";
             ctx.response.prepare_payload();
         } else {
             handler(ctx);

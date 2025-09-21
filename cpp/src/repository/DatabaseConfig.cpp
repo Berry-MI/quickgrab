@@ -1,4 +1,4 @@
-#include \"quickgrab/repository/DatabaseConfig.hpp\"
+#include "quickgrab/repository/DatabaseConfig.hpp"
 
 namespace quickgrab::repository {
 

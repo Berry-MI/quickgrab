@@ -1,5 +1,5 @@
-#include \"quickgrab/workflow/GrabWorkflow.hpp\"
-#include \"quickgrab/util/JsonUtil.hpp\"
+#include "quickgrab/workflow/GrabWorkflow.hpp"
+#include "quickgrab/util/JsonUtil.hpp"
 
 #include <algorithm>
 #include <array>

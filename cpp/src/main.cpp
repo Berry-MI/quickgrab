@@ -40,7 +40,7 @@
 
 namespace {
 using quickgrab::proxy::ProxyEndpoint;
-
+using namespace quickgrab;
 repository::DatabaseConfig loadDatabaseConfig(const std::filesystem::path& path) {
     repository::DatabaseConfig config;
     config.host = "127.0.0.1";

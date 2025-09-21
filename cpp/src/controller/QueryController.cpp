@@ -1,5 +1,5 @@
-#include \"quickgrab/controller/QueryController.hpp\"
-#include \"quickgrab/util/JsonUtil.hpp\"
+#include "quickgrab/controller/QueryController.hpp"
+#include "quickgrab/util/JsonUtil.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>

@@ -1,6 +1,6 @@
-#include \"quickgrab/service/GrabService.hpp\"
-#include \"quickgrab/model/Result.hpp\"
-#include \"quickgrab/util/Logging.hpp\"
+#include "quickgrab/service/GrabService.hpp"
+#include "quickgrab/model/Result.hpp"
+#include "quickgrab/util/Logging.hpp"
 
 #include <boost/asio/post.hpp>
 #include <boost/json.hpp>

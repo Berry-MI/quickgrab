@@ -1,4 +1,4 @@
-#include \"quickgrab/proxy/ProxyPool.hpp\"
+#include "quickgrab/proxy/ProxyPool.hpp"
 
 #include <algorithm>
 #include <chrono>

@@ -1,0 +1,35 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "win-debug",
+      "generator": "Ninja",
+      "binaryDir": "build/win-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      },
+      "toolchainFile": "D:/WorkSpace/vcpkg/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+      "name": "win-rel",
+      "generator": "Ninja",
+      "binaryDir": "build/win-rel",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      },
+      "toolchainFile": "D:/WorkSpace/vcpkg/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-debug",
+      "configurePreset": "win-debug"
+    },
+    {
+      "name": "win-rel",
+      "configurePreset": "win-rel"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "clouddrive-x-beast",
+  "version": "2.2.0",
+  "dependencies": [
+    "boost-beast",
+    "boost-asio",
+    "boost-system",
+    "boost-json",
+    "openssl",
+    "spdlog",
+    "nlohmann-json",
+    "mysql-connector-cpp",
+    "protobuf",
+    "jwt-cpp"
+  ]
+}

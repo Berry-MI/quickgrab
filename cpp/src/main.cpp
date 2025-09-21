@@ -7,6 +7,7 @@
 #include "quickgrab/controller/ToolController.hpp"
 #include "quickgrab/controller/UserController.hpp"
 #include "quickgrab/proxy/ProxyPool.hpp"
+#include "quickgrab/repository/BuyersRepository.hpp"
 #include "quickgrab/repository/DatabaseConfig.hpp"
 #include "quickgrab/repository/MySqlConnectionPool.hpp"
 #include "quickgrab/repository/RequestsRepository.hpp"
@@ -17,6 +18,7 @@
 #include "quickgrab/service/MailService.hpp"
 #include "quickgrab/service/ProxyService.hpp"
 #include "quickgrab/service/QueryService.hpp"
+#include "quickgrab/service/StatisticsService.hpp"
 #include "quickgrab/util/HttpClient.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
@@ -410,6 +412,7 @@ int main(int /*argc*/, char** /*argv*/) {
     repository::MySqlConnectionPool connectionPool{dbConfig};
     repository::RequestsRepository requests{connectionPool};
     repository::ResultsRepository results{connectionPool};
+    repository::BuyersRepository buyers{connectionPool};
 
     service::MailService::Config mailConfig;
     if (const char* from = std::getenv("QUICKGRAB_MAIL_FROM")) {
@@ -426,7 +429,8 @@ int main(int /*argc*/, char** /*argv*/) {
 
     service::GrabService grabService{io, workerPool, requests, results, httpClient, proxyPool, mailService};
     service::ProxyService proxyService{io, proxyPool};
-    service::QueryService queryService{requests, results};
+    service::QueryService queryService{requests, results, buyers};
+    service::StatisticsService statisticsService{results, buyers};
 
     auto initialProxies = loadProxiesFromFile("data/proxies.json");
     if (!initialProxies.empty()) {
@@ -460,7 +464,7 @@ int main(int /*argc*/, char** /*argv*/) {
     controller::QueryController queryController{queryService};
     queryController.registerRoutes(*router);
 
-    controller::StatisticsController statisticsController;
+    controller::StatisticsController statisticsController{statisticsService};
     statisticsController.registerRoutes(*router);
 
     controller::SubmitController submitController;

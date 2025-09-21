@@ -4,12 +4,15 @@
 
 #include <mysqlx/xdevapi.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 #include <ctime>
 
 namespace quickgrab::repository {
@@ -26,6 +29,79 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
 }
+
+mysqlx::Value toTimestampValue(const std::chrono::system_clock::time_point& tp) {
+    if (tp.time_since_epoch().count() == 0) {
+        return mysqlx::Value(mysqlx::nullValue);
+    }
+    return mysqlx::Value(formatTimestamp(tp));
+}
+
+mysqlx::Value jsonOrNull(const boost::json::value& value) {
+    if (value.is_null()) {
+        return mysqlx::Value(mysqlx::nullValue);
+    }
+    return mysqlx::Value(quickgrab::util::stringifyJson(value));
+}
+
+std::string readString(const mysqlx::Value& value) {
+    if (value.isNull()) {
+        return {};
+    }
+    try {
+        return value.get<std::string>();
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn, std::string{"Failed to read string column: "} + ex.what());
+        return {};
+    }
+}
+
+double readDouble(const mysqlx::Value& value) {
+    if (value.isNull()) {
+        return 0.0;
+    }
+    try {
+        return value.get<double>();
+    } catch (const std::exception&) {
+        try {
+            return std::stod(value.get<std::string>());
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"Failed to read double column: "} + ex.what());
+            return 0.0;
+        }
+    }
+}
+
+boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string& column) {
+    if (value.isNull()) {
+        return boost::json::value();
+    }
+    try {
+        return quickgrab::util::parseJson(value.get<std::string>());
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn, "JSON parse failed on column " + column + ": " + ex.what());
+        return boost::json::value();
+    }
+}
+
+std::chrono::system_clock::time_point parseDateTimeValue(const mysqlx::Value& value,
+                                                         const std::chrono::system_clock::time_point& fallback = {}) {
+    if (value.isNull()) {
+        return fallback;
+    }
+    try {
+        std::tm tm{};
+        std::istringstream iss(value.get<std::string>());
+        iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        if (iss.fail()) {
+            return fallback;
+        }
+        return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
+        return fallback;
+    }
+}
 } // namespace
 
 ResultsRepository::ResultsRepository(MySqlConnectionPool& pool)
@@ -36,11 +112,55 @@ void ResultsRepository::insertResult(const model::Result& result) {
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("results");
-        table.insert("request_id", "status", "payload", "created_at")
+        auto responsePayload = result.responseMessage.is_null() ? result.payload : result.responseMessage;
+        table.insert("request_id",
+                    "device_id",
+                    "buyer_id",
+                    "thread_id",
+                    "link",
+                    "cookies",
+                    "order_info",
+                    "user_info",
+                    "order_template",
+                    "message",
+                    "id_number",
+                    "keyword",
+                    "start_time",
+                    "end_time",
+                    "quantity",
+                    "delay",
+                    "frequency",
+                    "type",
+                    "status",
+                    "response_message",
+                    "actual_earnings",
+                    "estimated_earnings",
+                    "extension",
+                    "created_at")
             .values(result.requestId,
+                    result.deviceId,
+                    result.buyerId,
+                    result.threadId,
+                    result.link,
+                    result.cookies,
+                    jsonOrNull(result.orderInfo),
+                    jsonOrNull(result.userInfo),
+                    jsonOrNull(result.orderTemplate),
+                    result.message,
+                    result.idNumber,
+                    result.keyword,
+                    toTimestampValue(result.startTime),
+                    toTimestampValue(result.endTime),
+                    result.quantity,
+                    result.delay,
+                    result.frequency,
+                    result.type,
                     result.status,
-                    util::stringifyJson(result.payload),
-                    formatTimestamp(result.createdAt))
+                    jsonOrNull(responsePayload),
+                    result.actualEarnings,
+                    result.estimatedEarnings,
+                    jsonOrNull(result.extension),
+                    toTimestampValue(result.createdAt))
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Insert result failed: "} + err.what());
@@ -51,15 +171,13 @@ void ResultsRepository::insertResult(const model::Result& result) {
 std::optional<model::Result> ResultsRepository::findById(int resultId) {
     auto session = pool_.acquire();
     try {
-        mysqlx::Schema schema = session->getSchema(pool_.schemaName());
-        mysqlx::Table table = schema.getTable("results");
-        mysqlx::RowResult rows = table
-            .select("id", "request_id", "status", "payload", "created_at")
-            .where("id = :id")
-            .bind("id", resultId)
-            .execute();
+        std::ostringstream sql;
+        sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
+               "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
+               "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE id = :id";
+        auto rows = session->sql(sql.str()).bind("id", resultId).execute();
         for (mysqlx::Row row : rows) {
-            return mapRow(row);
+            return mapDetailedRow(row);
         }
         return std::nullopt;
     } catch (const mysqlx::Error& err) {
@@ -83,35 +201,300 @@ void ResultsRepository::deleteById(int resultId) {
     }
 }
 
-model::Result ResultsRepository::mapRow(mysqlx::Row row) {
-    std::size_t index = 0;
-    auto next = [&row, &index]() -> mysqlx::Value { return row[index++]; };
+std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<std::string>& keyword,
+                                                            const std::optional<int>& buyerId,
+                                                            const std::optional<int>& type,
+                                                            const std::optional<int>& status,
+                                                            std::string_view orderColumn,
+                                                            std::string_view orderDirection,
+                                                            int offset,
+                                                            int limit) {
+    std::vector<model::Result> results;
+    auto session = pool_.acquire();
+    try {
+        std::ostringstream sql;
+        sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
+               "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
+               "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE 1=1";
+        if (keyword && !keyword->empty()) {
+            sql << " AND (user_info LIKE :keyword)";
+        }
+        if (buyerId) {
+            sql << " AND buyer_id = :buyerId";
+        }
+        if (type) {
+            sql << " AND type = :type";
+        }
+        if (status) {
+            sql << " AND status = :status";
+        }
+        sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
+        sql << " LIMIT :limit OFFSET :offset";
 
+        auto stmt = session->sql(sql.str());
+        if (keyword && !keyword->empty()) {
+            stmt.bind("keyword", "%" + *keyword + "%");
+        }
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (type) {
+            stmt.bind("type", *type);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
+        stmt.bind("limit", std::max(0, limit));
+        stmt.bind("offset", std::max(0, offset));
+
+        auto rows = stmt.execute();
+        for (mysqlx::Row row : rows) {
+            results.emplace_back(mapDetailedRow(row));
+        }
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"按条件查询抢购结果失败: "} + err.what());
+        throw;
+    }
+    return results;
+}
+
+std::vector<ResultsRepository::AggregatedStats> ResultsRepository::getStatistics(const std::optional<int>& buyerId,
+                                                                                const std::optional<std::string>& startTime,
+                                                                                const std::optional<std::string>& endTime) {
+    std::vector<AggregatedStats> stats;
+    auto session = pool_.acquire();
+    try {
+        std::ostringstream sql;
+        sql << "SELECT type, IFNULL(SUM(successCount), 0) AS successCount, IFNULL(SUM(failureCount), 0) AS failureCount, "
+               "IFNULL(SUM(exceptionCount), 0) AS exceptionCount, IFNULL(SUM(totalCount), 0) AS totalCount, "
+               "IFNULL(SUM(successEarnings), 0) AS successEarnings, IFNULL(SUM(failureEarnings), 0) AS failureEarnings, "
+               "IFNULL(SUM(exceptionEarnings), 0) AS exceptionEarnings, IFNULL(SUM(totalEarnings), 0) AS totalEarnings "
+               "FROM ( SELECT CASE WHEN type IS NULL THEN 'total' ELSE CAST(type AS CHAR) END AS type, "
+               "SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS successCount, "
+               "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS failureCount, "
+               "SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) AS exceptionCount, COUNT(*) AS totalCount, "
+               "SUM(CASE WHEN status = 1 THEN actual_earnings ELSE 0 END) AS successEarnings, "
+               "SUM(CASE WHEN status = 2 THEN actual_earnings ELSE 0 END) AS failureEarnings, "
+               "SUM(CASE WHEN status = 3 THEN actual_earnings ELSE 0 END) AS exceptionEarnings, SUM(actual_earnings) AS totalEarnings "
+               "FROM results";
+        if (buyerId || startTime || endTime) {
+            sql << " WHERE 1=1";
+        }
+        if (buyerId) {
+            sql << " AND buyer_id = :buyerId";
+        }
+        if (startTime) {
+            sql << " AND start_time >= :startTime";
+        }
+        if (endTime) {
+            sql << " AND start_time <= :endTime";
+        }
+        sql << " GROUP BY type WITH ROLLUP UNION ALL SELECT '1' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '2' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '3' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT 'total' AS type, 0, 0, 0, 0, 0, 0, 0, 0 ) AS stats GROUP BY type";
+
+        auto stmt = session->sql(sql.str());
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (startTime) {
+            stmt.bind("startTime", *startTime);
+        }
+        if (endTime) {
+            stmt.bind("endTime", *endTime);
+        }
+        auto rows = stmt.execute();
+        for (mysqlx::Row row : rows) {
+            AggregatedStats entry{};
+            entry.type = readString(row[0]);
+            entry.successCount = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
+            entry.failureCount = row[2].isNull() ? 0 : row[2].get<std::int64_t>();
+            entry.exceptionCount = row[3].isNull() ? 0 : row[3].get<std::int64_t>();
+            entry.totalCount = row[4].isNull() ? 0 : row[4].get<std::int64_t>();
+            entry.successEarnings = readDouble(row[5]);
+            entry.failureEarnings = readDouble(row[6]);
+            entry.exceptionEarnings = readDouble(row[7]);
+            entry.totalEarnings = readDouble(row[8]);
+            stats.emplace_back(std::move(entry));
+        }
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询统计数据失败: "} + err.what());
+        throw;
+    }
+    return stats;
+}
+
+std::vector<ResultsRepository::DailyStat> ResultsRepository::getDailyStats(const std::optional<int>& buyerId,
+                                                                           const std::optional<int>& status) {
+    std::vector<DailyStat> items;
+    auto session = pool_.acquire();
+    try {
+        std::ostringstream sql;
+        sql << "SELECT dates.date AS date, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+               "FROM (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date FROM seq_0_to_14) dates "
+               "LEFT JOIN results r ON DATE(r.start_time) = dates.date";
+        if (buyerId || status) {
+            sql << " AND 1=1";
+        }
+        if (buyerId) {
+            sql << " AND r.buyer_id = :buyerId";
+        }
+        if (status) {
+            sql << " AND r.status = :status";
+        }
+        sql << " GROUP BY dates.date ORDER BY dates.date";
+
+        auto stmt = session->sql(sql.str());
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
+        auto rows = stmt.execute();
+        for (mysqlx::Row row : rows) {
+            DailyStat stat{};
+            stat.date = readString(row[0]);
+            stat.total = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
+            stat.earnings = readDouble(row[2]);
+            items.emplace_back(std::move(stat));
+        }
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询每日统计失败: "} + err.what());
+        throw;
+    }
+    return items;
+}
+
+std::vector<ResultsRepository::HourlyStat> ResultsRepository::getHourlyStats(const std::optional<int>& buyerId,
+                                                                             const std::optional<int>& status) {
+    std::vector<HourlyStat> items;
+    auto session = pool_.acquire();
+    try {
+        std::ostringstream sql;
+        sql << "SELECT hours.hour AS hour, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+               "FROM (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL "
+               "SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours "
+               "LEFT JOIN results r ON HOUR(r.start_time) = hours.hour AND r.start_time >= NOW() - INTERVAL 1 DAY";
+        if (buyerId || status) {
+            sql << " AND 1=1";
+        }
+        if (buyerId) {
+            sql << " AND r.buyer_id = :buyerId";
+        }
+        if (status) {
+            sql << " AND r.status = :status";
+        }
+        sql << " GROUP BY hours.hour ORDER BY hours.hour";
+
+        auto stmt = session->sql(sql.str());
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
+        auto rows = stmt.execute();
+        for (mysqlx::Row row : rows) {
+            HourlyStat stat{};
+            stat.hour = row[0].isNull() ? 0 : row[0].get<int>();
+            stat.total = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
+            stat.earnings = readDouble(row[2]);
+            items.emplace_back(std::move(stat));
+        }
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询每小时统计失败: "} + err.what());
+        throw;
+    }
+    return items;
+}
+
+model::Result ResultsRepository::mapRow(mysqlx::Row row) {
+    return mapDetailedRow(std::move(row));
+}
+
+model::Result ResultsRepository::mapDetailedRow(mysqlx::Row row) {
     model::Result result{};
-    result.id = next().get<int>();
-    result.requestId = next().get<int>();
-    auto statusValue = next();
-    if (!statusValue.isNull()) {
-        try {
-            result.status = statusValue.get<std::string>();
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn, std::string{"Failed to read result status: "} + ex.what());
+    if (row.colCount() == 0) {
+        return result;
+    }
+
+    result.id = row[0].isNull() ? 0 : row[0].get<int>();
+    if (row.colCount() > 1) {
+        result.requestId = row[1].isNull() ? 0 : row[1].get<int>();
+    }
+    if (row.colCount() > 2) {
+        result.deviceId = row[2].isNull() ? 0 : row[2].get<int>();
+    }
+    if (row.colCount() > 3) {
+        result.buyerId = row[3].isNull() ? 0 : row[3].get<int>();
+    }
+    if (row.colCount() > 4) {
+        result.threadId = readString(row[4]);
+    }
+    if (row.colCount() > 5) {
+        result.link = readString(row[5]);
+    }
+    if (row.colCount() > 6) {
+        result.cookies = readString(row[6]);
+    }
+    if (row.colCount() > 7) {
+        result.orderInfo = parseJsonColumn(row[7], "order_info");
+    }
+    if (row.colCount() > 8) {
+        result.userInfo = parseJsonColumn(row[8], "user_info");
+    }
+    if (row.colCount() > 9) {
+        result.orderTemplate = parseJsonColumn(row[9], "order_template");
+    }
+    if (row.colCount() > 10) {
+        result.message = readString(row[10]);
+    }
+    if (row.colCount() > 11) {
+        result.idNumber = readString(row[11]);
+    }
+    if (row.colCount() > 12) {
+        result.keyword = readString(row[12]);
+    }
+    if (row.colCount() > 13) {
+        result.startTime = parseDateTimeValue(row[13]);
+    }
+    if (row.colCount() > 14) {
+        result.endTime = parseDateTimeValue(row[14]);
+    }
+    if (row.colCount() > 15) {
+        result.quantity = row[15].isNull() ? 0 : row[15].get<int>();
+    }
+    if (row.colCount() > 16) {
+        result.delay = row[16].isNull() ? 0 : row[16].get<int>();
+    }
+    if (row.colCount() > 17) {
+        result.frequency = row[17].isNull() ? 0 : row[17].get<int>();
+    }
+    if (row.colCount() > 18) {
+        result.type = row[18].isNull() ? 0 : row[18].get<int>();
+    }
+    if (row.colCount() > 19) {
+        result.status = row[19].isNull() ? 0 : row[19].get<int>();
+    }
+    if (row.colCount() > 20) {
+        result.responseMessage = parseJsonColumn(row[20], "response_message");
+        if (result.payload.is_null()) {
+            result.payload = result.responseMessage;
         }
     }
-    auto payloadValue = next();
-    if (!payloadValue.isNull()) {
-        try {
-            result.payload = quickgrab::util::parseJson(payloadValue.get<std::string>());
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn, std::string{"Parse result payload failed: "} + ex.what());
-        }
+    if (row.colCount() > 21) {
+        result.actualEarnings = readDouble(row[21]);
     }
-    auto createdValue = next();
-    if (!createdValue.isNull()) {
+    if (row.colCount() > 22) {
+        result.estimatedEarnings = readDouble(row[22]);
+    }
+    if (row.colCount() > 23) {
+        result.extension = parseJsonColumn(row[23], "extension");
+    }
+    if (row.colCount() > 24 && !row[24].isNull()) {
         try {
-            result.createdAt = parseTimestamp(createdValue.get<std::string>());
+            result.createdAt = parseTimestamp(row[24].get<std::string>());
         } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn, std::string{"Failed to parse result timestamp: "} + ex.what());
+            util::log(util::LogLevel::warn, std::string{"Failed to parse result created_at: "} + ex.what());
         }
     }
     return result;

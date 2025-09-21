@@ -33,10 +33,12 @@ add_library(quickgrab_core
     src/service/MailService.cpp
     src/service/ProxyService.cpp
     src/service/QueryService.cpp
+    src/service/StatisticsService.cpp
     src/repository/DatabaseConfig.cpp
     src/repository/MySqlConnectionPool.cpp
     src/repository/RequestsRepository.cpp
     src/repository/ResultsRepository.cpp
+    src/repository/BuyersRepository.cpp
     src/proxy/ProxyPool.cpp
     src/util/HttpClient.cpp
     src/util/JsonUtil.cpp

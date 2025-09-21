@@ -105,8 +105,28 @@ void GrabService::executeGrab(model::Request request) {
 void GrabService::handleResult(const model::Request& request, const workflow::GrabResult& result) {
     model::Result stored;
     stored.requestId = request.id;
+    stored.deviceId = request.deviceId;
+    stored.buyerId = request.buyerId;
+    stored.threadId = request.threadId;
+    stored.link = request.link;
+    stored.cookies = request.cookies;
+    stored.orderInfo = request.orderInfo;
+    stored.userInfo = request.userInfo;
+    stored.orderTemplate = request.orderTemplate;
+    stored.message = request.message;
+    stored.idNumber = request.idNumber;
+    stored.keyword = request.keyword;
+    stored.startTime = request.startTime;
+    stored.endTime = request.endTime;
+    stored.quantity = request.quantity;
+    stored.delay = request.delay;
+    stored.frequency = request.frequency;
+    stored.type = request.type;
+    stored.status = result.statusCode;
+    stored.actualEarnings = request.actualEarnings;
+    stored.estimatedEarnings = request.estimatedEarnings;
+    stored.extension = request.extension;
     stored.createdAt = std::chrono::system_clock::now();
-    stored.status = std::to_string(result.statusCode);
     boost::json::object payload;
     payload["success"] = result.success;
     payload["shouldContinue"] = result.shouldContinue;
@@ -121,6 +141,7 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
         payload["response"] = result.response;
     }
     stored.payload = std::move(payload);
+    stored.responseMessage = stored.payload;
 
     if (result.success) {
         util::log(util::LogLevel::info, "抢购完成 id=" + std::to_string(request.id));

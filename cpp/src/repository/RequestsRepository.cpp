@@ -8,8 +8,10 @@
 #include <chrono>
 #include <exception>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <ctime>
 
 namespace quickgrab::repository {
@@ -216,6 +218,65 @@ void RequestsRepository::deleteById(int requestId) {
         util::log(util::LogLevel::error, std::string{"Delete request failed: "} + err.what());
         throw;
     }
+}
+
+std::vector<model::Request> RequestsRepository::findByFilters(const std::optional<std::string>& keyword,
+                                                              const std::optional<int>& buyerId,
+                                                              const std::optional<int>& type,
+                                                              const std::optional<int>& status,
+                                                              std::string_view orderColumn,
+                                                              std::string_view orderDirection,
+                                                              int offset,
+                                                              int limit) {
+    std::vector<model::Request> requests;
+    auto session = pool_.acquire();
+    try {
+        std::ostringstream sql;
+        sql << "SELECT id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, message, "
+               "id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, order_parameters, "
+               "actual_earnings, estimated_earnings, extension FROM requests WHERE 1=1";
+
+        if (keyword && !keyword->empty()) {
+            sql << " AND user_info LIKE :keyword";
+        }
+        if (buyerId) {
+            sql << " AND buyer_id = :buyerId";
+        }
+        if (type) {
+            sql << " AND type = :type";
+        }
+        if (status) {
+            sql << " AND status = :status";
+        }
+
+        sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
+        sql << " LIMIT :limit OFFSET :offset";
+
+        auto stmt = session->sql(sql.str());
+        if (keyword && !keyword->empty()) {
+            stmt.bind("keyword", "%" + *keyword + "%");
+        }
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (type) {
+            stmt.bind("type", *type);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
+        stmt.bind("limit", std::max(0, limit));
+        stmt.bind("offset", std::max(0, offset));
+
+        auto rows = stmt.execute();
+        for (mysqlx::Row row : rows) {
+            requests.emplace_back(mapRow(row));
+        }
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"按条件查询抢购请求失败: "} + err.what());
+        throw;
+    }
+    return requests;
 }
 
 } // namespace quickgrab::repository

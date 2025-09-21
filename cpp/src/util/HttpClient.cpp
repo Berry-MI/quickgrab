@@ -163,7 +163,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                                            bool useProxy)
 {
     request.version(kHttpVersion);
-    if (!request.has(boost::beast::http::field::host)) {
+    if (request.find(boost::beast::http::field::host) == request.end()) {
         throw std::runtime_error("request missing Host header");
     }
 
@@ -264,7 +264,6 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 proxiedRequest.set("Proxy-Authorization", auth);
             }
 
-
             boost::beast::http::write(stream, proxiedRequest);
             boost::beast::flat_buffer buffer;
             HttpResponse response;
@@ -281,8 +280,8 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
             proxyPool_.reportSuccess(affinityKey, *proxy);
             return response;
-
         }
+
 
         boost::asio::ip::tcp::resolver resolver(io_);
         auto results = resolver.resolve(parsed.host, parsed.port);

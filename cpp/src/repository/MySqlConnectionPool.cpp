@@ -12,18 +12,7 @@ namespace quickgrab::repository {
 namespace {
 std::string normalizeHost(const std::string& host) {
     return host.empty() ? std::string{"127.0.0.1"} : host;
-}
 
-mysqlx::SessionSettings buildSettings(const DatabaseConfig& config) {
-    mysqlx::SessionSettings settings;
-    settings.set(mysqlx::SessionOption::HOST, normalizeHost(config.host));
-    settings.set(mysqlx::SessionOption::PORT, static_cast<unsigned int>(config.port));
-    settings.set(mysqlx::SessionOption::USER, config.user);
-    settings.set(mysqlx::SessionOption::PWD, config.password);
-    if (!config.database.empty()) {
-        settings.set(mysqlx::SessionOption::DB, config.database);
-    }
-    return settings;
 }
 } // namespace
 
@@ -42,10 +31,19 @@ MySqlConnectionPool::MySqlConnectionPool(DatabaseConfig config)
 
 std::unique_ptr<mysqlx::Session> MySqlConnectionPool::createSession() {
     try {
-        auto session = std::make_unique<mysqlx::Session>(buildSettings(config_));
+
+        auto session = std::make_unique<mysqlx::Session>(
+            mysqlx::SessionOption::HOST, normalizeHost(config_.host),
+            mysqlx::SessionOption::PORT, static_cast<unsigned int>(config_.port),
+            mysqlx::SessionOption::USER, config_.user,
+            mysqlx::SessionOption::PWD, config_.password);
         if (!config_.charset.empty()) {
             session->sql("SET NAMES '" + config_.charset + "'").execute();
         }
+        if (!config_.database.empty()) {
+            session->sql("USE `" + config_.database + "`").execute();
+        }
+
         return session;
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Create MySQL session failed: "} + err.what());
@@ -77,7 +75,9 @@ std::shared_ptr<mysqlx::Session> MySqlConnectionPool::acquire() {
 
 void MySqlConnectionPool::release(mysqlx::Session* session) {
     std::unique_ptr<mysqlx::Session> holder(session);
-    bool healthy = holder && holder->isOpen();
+
+    bool healthy = static_cast<bool>(holder);
+
 
     std::unique_lock<std::mutex> lock(mutex_);
     if (healthy) {

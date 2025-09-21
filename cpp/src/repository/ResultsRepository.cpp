@@ -2,9 +2,7 @@
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
-
 #include <mysqlx/xdevapi.h>
-
 
 #include <chrono>
 #include <exception>
@@ -13,6 +11,8 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <ctime>
+
 
 namespace quickgrab::repository {
 namespace {
@@ -29,18 +29,8 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     return oss.str();
 }
 
+} // namespace
 
-std::chrono::system_clock::time_point fromDateTime(mysqlx::datetime value) {
-    std::tm tm{};
-    tm.tm_year = value.year - 1900;
-    tm.tm_mon = value.month - 1;
-    tm.tm_mday = value.day;
-    tm.tm_hour = value.hour;
-    tm.tm_min = value.minute;
-    tm.tm_sec = value.second;
-    auto base = std::chrono::system_clock::from_time_t(std::mktime(&tm));
-    return base + std::chrono::microseconds(value.microsecond);
-}
 
 
 } // namespace
@@ -103,10 +93,9 @@ void ResultsRepository::deleteById(int resultId) {
     }
 }
 
-model::Result ResultsRepository::mapRow(const mysqlx::Row& row) {
+model::Result ResultsRepository::mapRow(mysqlx::Row row) {
     std::size_t index = 0;
     auto next = [&row, &index]() -> mysqlx::Value { return row[index++]; };
-
 
     model::Result result{};
     result.id = next().get<int>();
@@ -129,14 +118,15 @@ model::Result ResultsRepository::mapRow(const mysqlx::Row& row) {
     }
     auto createdValue = next();
     if (!createdValue.isNull()) {
-        if (createdValue.getType() == mysqlx::Value::Type::DATETIME) {
-            result.createdAt = fromDateTime(createdValue.get<mysqlx::datetime>());
-        } else if (createdValue.getType() == mysqlx::Value::Type::STRING) {
+        try {
             result.createdAt = parseTimestamp(createdValue.get<std::string>());
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"Failed to parse result timestamp: "} + ex.what());
         }
     }
     return result;
 }
+
 
 std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const std::string& value) {
     if (value.empty()) {

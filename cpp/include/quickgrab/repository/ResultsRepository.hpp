@@ -4,14 +4,13 @@
 #include "quickgrab/repository/MySqlConnectionPool.hpp"
 
 
+#include <mysqlx/xdevapi.h>
+
+
 #include <chrono>
 #include <optional>
 #include <string>
 
-namespace mysqlx {
-class Row;
-
-}
 
 namespace quickgrab::repository {
 
@@ -25,7 +24,7 @@ public:
 
 private:
 
-    model::Result mapRow(const mysqlx::Row& row);
+    model::Result mapRow(mysqlx::Row row);
 
     std::chrono::system_clock::time_point parseTimestamp(const std::string& value);
 

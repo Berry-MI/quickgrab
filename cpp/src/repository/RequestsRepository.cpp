@@ -11,6 +11,9 @@
 #include <sstream>
 #include <string>
 
+#include <ctime>
+
+
 namespace quickgrab::repository {
 namespace {
 std::chrono::system_clock::time_point parseDateTimeString(const std::string& input) {
@@ -26,33 +29,22 @@ std::chrono::system_clock::time_point parseDateTimeString(const std::string& inp
     return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
-std::chrono::system_clock::time_point fromDateTime(mysqlx::datetime value) {
-    std::tm tm{};
-    tm.tm_year = value.year - 1900;
-    tm.tm_mon = value.month - 1;
-    tm.tm_mday = value.day;
-    tm.tm_hour = value.hour;
-    tm.tm_min = value.minute;
-    tm.tm_sec = value.second;
-    auto base = std::chrono::system_clock::from_time_t(std::mktime(&tm));
-    return base + std::chrono::microseconds(value.microsecond);
-}
-
-std::chrono::system_clock::time_point parseDateTimeValue(mysqlx::Value value) {
+std::chrono::system_clock::time_point parseDateTimeValue(const mysqlx::Value& value) {
     if (value.isNull()) {
         return std::chrono::system_clock::now();
     }
-    switch (value.getType()) {
-    case mysqlx::Value::Type::DATETIME:
-        return fromDateTime(value.get<mysqlx::datetime>());
-    case mysqlx::Value::Type::STRING:
+    try {
         return parseDateTimeString(value.get<std::string>());
-    default:
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
+
         return std::chrono::system_clock::now();
     }
 }
 
-std::string readString(mysqlx::Value value) {
+
+std::string readString(const mysqlx::Value& value) {
+
     if (value.isNull()) {
         return {};
     }
@@ -64,7 +56,9 @@ std::string readString(mysqlx::Value value) {
     }
 }
 
-double readDouble(mysqlx::Value value) {
+
+double readDouble(const mysqlx::Value& value) {
+
     if (value.isNull()) {
         return 0.0;
     }
@@ -76,7 +70,9 @@ double readDouble(mysqlx::Value value) {
     }
 }
 
-boost::json::value parseJsonColumn(mysqlx::Value value, const std::string& column) {
+
+boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string& column) {
+
     if (value.isNull()) {
         return boost::json::object{};
     }
@@ -86,13 +82,30 @@ boost::json::value parseJsonColumn(mysqlx::Value value, const std::string& colum
         util::log(util::LogLevel::warn, "JSON parse failed on column " + column + ": " + ex.what());
         return boost::json::object{};
     }
+
+}
+
+std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
+    auto tt = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+
 }
 } // namespace
 
 RequestsRepository::RequestsRepository(MySqlConnectionPool& pool)
     : pool_(pool) {}
 
-model::Request RequestsRepository::mapRow(const mysqlx::Row& row) {
+
+model::Request RequestsRepository::mapRow(mysqlx::Row row) {
+
     std::size_t index = 0;
     auto next = [&row, &index]() -> mysqlx::Value { return row[index++]; };
 
@@ -100,26 +113,45 @@ model::Request RequestsRepository::mapRow(const mysqlx::Row& row) {
     request.id = next().get<int>();
     request.deviceId = next().get<int>();
     request.buyerId = next().get<int>();
-    request.threadId = readString(next());
-    request.link = readString(next());
-    request.cookies = readString(next());
-    request.orderInfo = parseJsonColumn(next(), "order_info");
-    request.userInfo = parseJsonColumn(next(), "user_info");
-    request.orderTemplate = parseJsonColumn(next(), "order_template");
-    request.message = readString(next());
-    request.idNumber = readString(next());
-    request.keyword = readString(next());
-    request.startTime = parseDateTimeValue(next());
-    request.endTime = parseDateTimeValue(next());
+
+    auto value = next();
+    request.threadId = readString(value);
+    value = next();
+    request.link = readString(value);
+    value = next();
+    request.cookies = readString(value);
+    value = next();
+    request.orderInfo = parseJsonColumn(value, "order_info");
+    value = next();
+    request.userInfo = parseJsonColumn(value, "user_info");
+    value = next();
+    request.orderTemplate = parseJsonColumn(value, "order_template");
+    value = next();
+    request.message = readString(value);
+    value = next();
+    request.idNumber = readString(value);
+    value = next();
+    request.keyword = readString(value);
+    value = next();
+    request.startTime = parseDateTimeValue(value);
+    value = next();
+    request.endTime = parseDateTimeValue(value);
+
     request.quantity = next().get<int>();
     request.delay = next().get<int>();
     request.frequency = next().get<int>();
     request.type = next().get<int>();
     request.status = next().get<int>();
-    request.orderParameters = parseJsonColumn(next(), "order_parameters");
-    request.actualEarnings = readDouble(next());
-    request.estimatedEarnings = readDouble(next());
-    request.extension = parseJsonColumn(next(), "extension");
+
+    value = next();
+    request.orderParameters = parseJsonColumn(value, "order_parameters");
+    value = next();
+    request.actualEarnings = readDouble(value);
+    value = next();
+    request.estimatedEarnings = readDouble(value);
+    value = next();
+    request.extension = parseJsonColumn(value, "extension");
+
     return request;
 }
 
@@ -161,7 +193,9 @@ void RequestsRepository::updateStatus(int requestId, int status) {
         mysqlx::Table table = schema.getTable("requests");
         table.update()
             .set("status", status)
-            .set("updated_at", mysqlx::Expr("NOW()"))
+
+            .set("updated_at", formatTimestamp(std::chrono::system_clock::now()))
+
             .where("id = :id")
             .bind("id", requestId)
             .execute();
@@ -173,12 +207,13 @@ void RequestsRepository::updateStatus(int requestId, int status) {
 
 void RequestsRepository::updateThreadId(int requestId, const std::string& threadId) {
     auto session = pool_.acquire();
+
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
         table.update()
             .set("thread_id", threadId)
-            .set("updated_at", mysqlx::Expr("NOW()"))
+            .set("updated_at", formatTimestamp(std::chrono::system_clock::now()))
             .where("id = :id")
             .bind("id", requestId)
             .execute();
@@ -190,10 +225,10 @@ void RequestsRepository::updateThreadId(int requestId, const std::string& thread
 
 void RequestsRepository::deleteById(int requestId) {
     auto session = pool_.acquire();
-
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
+
         table.remove()
             .where("id = :id")
             .bind("id", requestId)

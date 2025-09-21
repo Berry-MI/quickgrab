@@ -347,7 +347,9 @@ bool MailService::deliver(const std::string& to,
         }
         ofs << "Subject: " << subject << "\n";
         ofs << "To: " << to << "\n";
-        ofs << "From: " << config_.senderName << " <" << config_.fromEmail << ">";
+
+        ofs << "From: " << config_.senderName << " <" << config_.fromEmail << ">\n\n";
+
         ofs << body;
         util::log(util::LogLevel::info,
                   "邮件已写入 " + path.string() + " subject=" + subject + " to=" + to);

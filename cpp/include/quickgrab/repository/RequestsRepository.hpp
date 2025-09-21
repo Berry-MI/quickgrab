@@ -3,12 +3,12 @@
 #include "quickgrab/model/Request.hpp"
 #include "quickgrab/repository/MySqlConnectionPool.hpp"
 
+
+#include <mysqlx/xdevapi.h>
+
 #include <string>
 #include <vector>
 
-namespace mysqlx {
-class Row;
-}
 
 namespace quickgrab::repository {
 
@@ -22,7 +22,9 @@ public:
     void deleteById(int requestId);
 
 private:
-    model::Request mapRow(const mysqlx::Row& row);
+
+    model::Request mapRow(mysqlx::Row row);
+
 
     MySqlConnectionPool& pool_;
 };

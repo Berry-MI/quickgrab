@@ -163,7 +163,7 @@ int main(int /*argc*/, char** /*argv*/) {
     util::HttpClient httpClient{io, proxyPool};
 
     std::filesystem::create_directories("data");
-    auto dbConfig = loadDatabaseConfig("data/database.json");
+    auto dbConfig = loadDatabaseConfig("../../data/database.json");
     util::log(util::LogLevel::info,
               "连接 MySQL: " + dbConfig.host + ":" + std::to_string(dbConfig.port) + "/" + dbConfig.database);
     repository::MySqlConnectionPool connectionPool{dbConfig};

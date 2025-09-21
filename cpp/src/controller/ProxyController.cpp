@@ -25,6 +25,8 @@ namespace quickgrab::controller {
 
 namespace {
 
+    using namespace quickgrab::util;
+
 constexpr char kDesktopUA[] =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
 constexpr char kMobileUA[] =
@@ -478,6 +480,7 @@ std::string resolveAffinityKey(const std::unordered_map<std::string, std::string
     }
     return trimmedFallback;
 }
+
 void proxyResponseToContext(quickgrab::server::RequestContext& ctx,
                             const HttpClient::HttpResponse& response) {
     ctx.response.result(response.result());

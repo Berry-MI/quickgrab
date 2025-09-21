@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抢购结果查询</title>
+    <link rel="icon" href="images/favicon.ico" type="image/x-icon">
+
+    <!-- 关键 CSS -->
+    <link href="css/styles.css" rel="stylesheet">
+    <link href="fonts/remixicon.css" rel="stylesheet">
+    <link href="css/query.css" rel="stylesheet">
+
+    <!-- 非关键 CSS 预加载 -->
+    <link as="style" href="css/modal.css" onload="this.onload=null;this.rel='stylesheet'" rel="preload">
+    <link as="style" href="css/alert.css" onload="this.onload=null;this.rel='stylesheet'" rel="preload">
+    <noscript>
+        <link href="css/modal.css" rel="stylesheet">
+        <link href="css/alert.css" rel="stylesheet">
+    </noscript>
+</head>
+
+<body>
+
+<div class="container">
+    <!-- 查询区域 -->
+    <div class="query-header">
+        <div class="form-group">
+            <select id="type">
+                <option disabled selected value="">抢购方式</option>
+                <option value="">全部</option>
+                <option value="1">定时开售</option>
+                <option value="2">手动上架</option>
+                <option value="3">捡漏模式</option>
+            </select>
+            <select id="buyerSelect" style="display: none">
+            </select>
+            <select id="status">
+                <option disabled selected value="">状态</option>
+                <option value="">全部</option>
+                <option value="1">成功</option>
+                <option value="2">失败</option>
+                <option value="3">异常</option>
+            </select>
+            <select id="order">
+                <option value="id_desc">最新</option>
+                <option selected value="end_time_desc">最近</option>
+                <option value="end_time_asc">最早</option>
+            </select>
+        </div>
+
+        <div class="query-group">
+            <input id="keywordInput" placeholder="输入关键词搜索" type="text">
+            <button onclick="resetAndFetchResults()" type="button">
+                <i class="ri-search-line"></i>
+                查询
+            </button>
+        </div>
+    </div>
+
+    <!-- 列表容器 -->
+    <div class="list-container">
+        <div id="resultsContainer"
+             style="height: calc(100vh - 280px); overflow-y: auto; -webkit-overflow-scrolling: touch;">
+            <!-- 查询结果将被动态插入 -->
+        </div>
+    </div>
+
+    <!-- 底部导航栏 -->
+    <footer class="footer-nav">
+        <a href="index.html">
+            <i class="ri-add-circle-line"></i>
+            <span>提交</span>
+        </a>
+        <a href="cart.html">
+            <i class="ri-shopping-cart-line"></i>
+            <span>购物车</span>
+        </a>
+        <a href="requests.html">
+            <i class="ri-list-check-2"></i>
+            <span>任务</span>
+        </a>
+        <a class="active" href="results.html">
+            <i class="ri-file-list-3-line"></i>
+            <span>结果</span>
+        </a>
+        <a href="user.html">
+            <i class="ri-user-3-line"></i>
+            <span>我的</span>
+        </a>
+    </footer>
+</div>
+
+<!-- 自定义提示框 -->
+<div class="custom-alert" id="customAlert"></div>
+
+    <!-- 遮罩层 -->
+    <div class="modal-overlay" id="modalOverlay"></div>
+
+    <!-- 模态框 -->
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>结果详情</h2>
+                <button class="close-button" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- 抢购详情内容 -->
+            </div>
+            <div class="modal-footer" id="modal-footer">
+                <!-- 按钮将通过JavaScript动态添加 -->
+            </div>
+        </div>
+    </div>
+
+<script type="module">
+    // 使用 async 导入模块
+    const {showDetails, showModal, closeModal, formatJSON, openLink, copyToClipboard} =
+        await import('./js/modal-handler.js');
+    const {ListHandler, formatDateWithYear, getTypeText, getBuyerText} =
+        await import('./js/list-handler.js');
+
+    // 将这些函数暴露给全局作用域
+    Object.assign(window, {
+        showModal,
+        closeModal,
+        formatJSON,
+        openLink,
+        copyToClipboard,
+        getTypeText,
+        getBuyerText
+    });
+
+    // 结果状态相关函数
+    function getResultStatusText(status) {
+        switch (status) {
+            case 1:
+                return '成功';
+            case 2:
+                return '失败';
+            case 3:
+                return '异常';
+            default:
+                return '未知';
+        }
+    }
+
+    function getResultStatusClass(status) {
+        switch (status) {
+            case 1:
+                return 'status-success';
+            case 2:
+                return 'status-failure';
+            case 3:
+                return 'status-exception';
+            default:
+                return '';
+        }
+    }
+
+    window.getResultStatusText = getResultStatusText;
+
+    // 设置showDetails函数
+    window.showDetails = (item) => showDetails(item, false, {
+        getTypeText: window.getTypeText,
+        getStatusText: window.getResultStatusText,
+        formatDateWithoutYear: window.formatDateWithoutYear,
+        getBuyerText: window.getBuyerText
+        });
+
+    // 初始化列表处理器
+    const listHandler = new ListHandler({
+        containerId: 'resultsContainer',
+        fetchUrl: '/getResults',
+        isRequest: false,
+        getStatusText: getResultStatusText,
+        getStatusClass: getResultStatusClass,
+        getTypeText: getTypeText,
+        formatDate: formatDateWithYear
+        });
+
+    // 将重置和获取数据的函数暴露给全局
+    window.resetAndFetchResults = () => listHandler.resetAndFetch();
+
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', () => {
+        listHandler.resetAndFetch();
+    });
+</script>
+</body>
+
+</html>

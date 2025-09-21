@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <link href="images/favicon.ico" rel="icon" type="image/x-icon">
+    <title>操作指南 - 抢购系统</title>
+
+    <!-- 关键 CSS -->
+    <link href="css/styles.css" rel="stylesheet">
+    <link href="fonts/remixicon.css" rel="stylesheet">
+    <style>
+        .guide-container {
+            padding: 24px;
+        }
+
+        .guide-section {
+            margin-bottom: 32px;
+        }
+
+        .guide-section h2 {
+            color: #2c3e50;
+            margin-bottom: 16px;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .guide-section h2 i {
+            color: #4CAF50;
+            font-size: 24px;
+        }
+
+        .guide-section p {
+            color: #4b5563;
+            line-height: 1.6;
+            margin-bottom: 12px;
+            font-size: 15px;
+        }
+
+        .guide-section ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .guide-section li {
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #4b5563;
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .guide-section li i {
+            color: #4CAF50;
+            font-size: 18px;
+            margin-top: 2px;
+        }
+
+        /* 更新日志样式 */
+        .changelog .version-list {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .version-item {
+            border-left: 2px solid #4CAF50;
+            padding-left: 16px;
+        }
+
+        .version-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .version-number {
+            font-size: 16px;
+            font-weight: 600;
+            color: #4CAF50;
+        }
+
+        .version-date {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+
+        .version-item ul {
+            margin-left: 0;
+        }
+
+        .version-item ul ul {
+            margin: 8px 0 0 24px;
+        }
+
+        .version-item ul ul li {
+            background: none;
+            padding: 4px 0;
+            margin-bottom: 0;
+            position: relative;
+        }
+
+        .version-item ul ul li::before {
+            content: '';
+            position: absolute;
+            left: -12px;
+            top: 12px;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #4CAF50;
+        }
+
+        .version-item strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            .guide-section h2 {
+                color: #e2e8f0;
+            }
+
+            .guide-section p {
+                color: #e2e8f0;
+            }
+
+            .guide-section li {
+                background: rgba(255, 255, 255, 0.05);
+                color: #e2e8f0;
+            }
+
+            .version-number {
+                color: #4CAF50;
+            }
+
+            .version-date {
+                color: #64748b;
+            }
+
+            .version-item strong {
+                color: #e2e8f0;
+            }
+
+            .version-item ul ul li::before {
+                background: #4CAF50;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .version-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+
+            .version-item ul ul {
+                margin-left: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header class="header-container">
+        <div>
+            <h2>操作指南</h2>
+        </div>
+        <a class="header-button" href="index.html">
+            <i class="ri-arrow-left-line"></i>
+            返回首页
+        </a>
+    </header>
+
+    <div class="guide-container">
+        <div class="guide-section">
+            <h2><i class="ri-guide-line"></i>基本介绍</h2>
+            <p>抢购系统是一个帮助用户快速提交抢购请求的工具。系统支持多种抢购方式，包括定时开售、手动上架和捡漏模式。</p>
+        </div>
+
+        <div class="guide-section">
+            <h2><i class="ri-shopping-cart-2-line"></i>抢购方式说明</h2>
+            <ul>
+                <li>
+                    <i class="ri-time-line"></i>
+                    <div>
+                        <strong>定时开售：</strong>适用于已知具体开售时间的商品，系统会在指定时间自动开始抢购。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-store-2-line"></i>
+                    <div>
+                        <strong>手动上架：</strong>适用于不定时上架的商品，系统会持续监控商品状态，一旦上架即开始抢购。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-search-2-line"></i>
+                    <div>
+                        <strong>捡漏模式：</strong>适用于已开售但库存不稳定的商品，系统会持续监控库存变化并尝试抢购。
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="guide-section">
+            <h2><i class="ri-settings-3-line"></i>功能说明</h2>
+            <ul>
+                <li>
+                    <i class="ri-input-method-line"></i>
+                    <div>
+                        <strong>生成订单链接：</strong>对应无法加购获取订单链接的商品，输入商品链接支持一键生成订单链接，提高操作效率，可能存在部分商品链接无法生成订单链接，请联系管理员。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-input-method-line"></i>
+                    <div>
+                        <strong>快捷输入：</strong>支持一键粘贴Cookie和商品链接，提高操作效率。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-timer-line"></i>
+                    <div>
+                        <strong>延迟设置：</strong>可设置延迟下单时间，支持手动设置和自动计算。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-refresh-line"></i>
+                    <div>
+                        <strong>刷新频率：</strong>可调整监控商品的刷新频率，建议适当调大，以防IP被封。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-mail-line"></i>
+                    <div>
+                        <strong>邮箱提醒：</strong>开启后可接收抢购结果通知。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-shield-star-line"></i>
+                    <div>
+                        <strong>多品保底：</strong>适用于同时抢购多件商品，当某件商品库存为空时会自动切换抢购其他有库存商品，提高整体抢购成功率。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-calendar-check-line"></i>
+                    <div>
+                        <strong>有效期品：</strong>系统会自动识别商品信息页中的有效期信息并自动开启相应处理，无需手动操作。
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-loop-left-line"></i>
+                    <div>
+                        <strong>自动捡漏：</strong>开启后，抢购失败的商品会自动加入捡漏队列，系统持续监控并尝试购买，注意如果开启自动捡漏，需要先设置好合适的结束时间。（注意任务列表不会显示）
+                    </div>
+                </li>
+                <li>
+                    <i class="ri-robot-line"></i>
+                    <div>
+                        <strong>智能预测：</strong>适用于手动上架且需要备注的商品，开启后点击"填写预测"按钮可以设置匹配规则：
+                        <ul style="margin-left: 20px; margin-top: 8px;">
+                            <li style="background: none; padding: 4px 0;">
+                                <div style="margin-bottom: 8px;">
+                                    <strong>基础规则说明</strong>
+                                    • 使用英文分号";"分隔多个关键词或选项值，表示"或"的关系<br>
+                                    • 使用"*"作为通配符，用于匹配特殊格式的问题
+                                </div>
+                            </li>
+                            <li style="background: none; padding: 4px 0;">
+                                <div style="margin-bottom: 8px;">
+                                    <strong>填空类型规则</strong>
+                                    • 普通填空：设置关键词和对应的填写值<br>
+                                    • 特殊填空：使用"输入*"匹配答案包含在问题中的情况（如"输入数字：459"，答案为459）<br>
+                                    • 选择题：关键词匹配问题，值使用分号分隔多个选项，未匹配时默认选第一项<br>
+                                    • 算术题：系统自动计算，无需设置规则
+                                </div>
+                            </li>
+                            <li style="background: none; padding: 4px 0;">
+                                <div style="margin-bottom: 8px;">
+                                    <strong>规则设置示例</strong>
+                                    • 数字提取：问题"输入数字：365"，设置"输入数字*;输入*"，值为"365"<br>
+                                    • 避免冲突：问题"淘宝店名"和"淘宝会员名"，分别设置"淘宝店铺;店名"和"会员名;淘宝id"<br>
+                                    • 错误示范：使用过于简单的关键词如"淘宝"会导致规则冲突
+                                </div>
+                            </li>
+                            <li style="background: none; padding: 4px 0;">
+                                <div>
+                                    <strong>AI智能补充</strong>
+                                    • 可设置参考问题和答案作为AI学习样本<br>
+                                    • 支持格式学习，如设置"输入：想买?想买"作为模板<br>
+                                    • 未匹配任何规则时由AI填写（响应约10秒，建议优先使用规则匹配）
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="guide-section">
+            <h2><i class="ri-error-warning-line"></i>注意事项</h2>
+            <ul>
+                <li>
+                    <i class="ri-checkbox-circle-line"></i>
+                    <div>请确保输入的Cookie有效且未过期。</div>
+                </li>
+                <li>
+                    <i class="ri-checkbox-circle-line"></i>
+                    <div>建议提前3-5分钟提交抢购任务。</div>
+                </li>
+                <li>
+                    <i class="ri-checkbox-circle-line"></i>
+                    <div>使用自动延时功能时，系统会自动计算最优延迟时间。</div>
+                </li>
+                <li>
+                    <i class="ri-checkbox-circle-line"></i>
+                    <div>如遇问题请及时联系管理员处理。</div>
+                </li>
+            </ul>
+        </div>
+
+        <!-- <div class="guide-section changelog">
+            <h2><i class="ri-history-line"></i>更新日志</h2>
+            <div class="version-list">
+                <div class="version-item">
+                    <div class="version-header">
+                        <span class="version-number">v2.0.0</span>
+                        <span class="version-date">2025-03-7</span>
+                    </div>
+                    <ul>
+                        <li>
+                            <i class="ri-add-circle-line"></i>
+                            <div>
+                                <strong>新增功能</strong>
+                                <ul>
+                                    <li>添加自动延时功能</li>
+                                    <li>新增邮箱提醒功能</li>
+                                    <li>增加操作指南页面</li>
+                                    <li>支持多品保底模式</li>
+                                </ul>
+                            </div>
+                        </li>
+                        <li>
+                            <i class="ri-brush-line"></i>
+                            <div>
+                                <strong>优化改进</strong>
+                                <ul>
+                                    <li>优化界面设计，提升用户体验</li>
+                                    <li>改进抢购成功率</li>
+                                    <li>优化网络请求策略</li>
+                                </ul>
+                            </div>
+                        </li>
+                        <li>
+                            <i class="ri-bug-line"></i>
+                            <div>
+                                <strong>问题修复</strong>
+                                <ul>
+                                    <li>修复Cookie失效检测问题</li>
+                                    <li>修复部分浏览器兼容性问题</li>
+                                </ul>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="version-item">
+                    <div class="version-header">
+                        <span class="version-number">v1.0.0</span>
+                        <span class="version-date">2024-05-01</span>
+                    </div>
+                    <ul>
+                        <li>
+                            <i class="ri-rocket-line"></i>
+                            <div>
+                                <strong>首次发布</strong>
+                                <ul>
+                                    <li>支持定时开售模式</li>
+                                    <li>支持手动上架模式</li>
+                                    <li>支持捡漏模式</li>
+                                    <li>基础抢购功能实现</li>
+                                </ul>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div> -->
+    </div>
+</div>
+
+</body>
+</html> 

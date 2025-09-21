@@ -83,7 +83,7 @@ private:
     void doClose() {
         boost::system::error_code ec;
         stream_.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-        stream_.close(ec);
+        stream_.socket().close(ec);
     }
 
     boost::beast::tcp_stream stream_;

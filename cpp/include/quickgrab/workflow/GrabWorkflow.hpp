@@ -21,9 +21,11 @@ struct GrabResult {
     bool success{};
     bool shouldUpdate{};
     bool shouldContinue{};
-    boost::json::value payload;
+    boost::json::value response;
     std::string message;
+    std::string error;
     int statusCode{};
+    int attempts{};
 };
 
 struct GrabContext {

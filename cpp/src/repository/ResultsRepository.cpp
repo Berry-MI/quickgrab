@@ -4,9 +4,12 @@
 
 #include <mysqlx/xdevapi.h>
 
+
 #include <chrono>
 #include <exception>
 #include <iomanip>
+
+
 #include <optional>
 #include <sstream>
 #include <string>
@@ -26,6 +29,7 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     return oss.str();
 }
 
+
 std::chrono::system_clock::time_point fromDateTime(mysqlx::datetime value) {
     std::tm tm{};
     tm.tm_year = value.year - 1900;
@@ -37,6 +41,7 @@ std::chrono::system_clock::time_point fromDateTime(mysqlx::datetime value) {
     auto base = std::chrono::system_clock::from_time_t(std::mktime(&tm));
     return base + std::chrono::microseconds(value.microsecond);
 }
+
 
 } // namespace
 
@@ -61,6 +66,7 @@ void ResultsRepository::insertResult(const model::Result& result) {
 }
 
 std::optional<model::Result> ResultsRepository::findById(int resultId) {
+
     auto session = pool_.acquire();
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
@@ -76,11 +82,13 @@ std::optional<model::Result> ResultsRepository::findById(int resultId) {
         return std::nullopt;
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Find result failed: "} + err.what());
+
         throw;
     }
 }
 
 void ResultsRepository::deleteById(int resultId) {
+
     auto session = pool_.acquire();
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
@@ -91,6 +99,7 @@ void ResultsRepository::deleteById(int resultId) {
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Delete result failed: "} + err.what());
+
         throw;
     }
 }
@@ -142,4 +151,4 @@ std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const st
     return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
-} // namespace quickgrab::repository
+

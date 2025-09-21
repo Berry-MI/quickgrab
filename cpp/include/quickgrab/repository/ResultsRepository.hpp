@@ -3,12 +3,14 @@
 #include "quickgrab/model/Result.hpp"
 #include "quickgrab/repository/MySqlConnectionPool.hpp"
 
+
 #include <chrono>
 #include <optional>
 #include <string>
 
 namespace mysqlx {
 class Row;
+
 }
 
 namespace quickgrab::repository {
@@ -22,7 +24,9 @@ public:
     void deleteById(int resultId);
 
 private:
+
     model::Result mapRow(const mysqlx::Row& row);
+
     std::chrono::system_clock::time_point parseTimestamp(const std::string& value);
 
     MySqlConnectionPool& pool_;

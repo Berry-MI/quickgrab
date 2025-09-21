@@ -38,12 +38,14 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -60,6 +62,11 @@ public class GrabService {
     public long precessingTime = 19L;
     public LocalDateTime updateTime = LocalDateTime.now();
     public LocalDateTime prestartTime = LocalDateTime.now();
+    private static final List<String> RETRY_KEYWORDS = Collections.unmodifiableList(Arrays.asList("请稍后再试", "拥挤", "重试", "稍后", "人潮拥挤", "商品尚未开售", "开小差", "系统开小差了", "系统开小差", "啊哦~ 人潮拥挤，请稍后重试~"));
+    private static final List<String> UPDATE_KEYWORDS = Collections.unmodifiableList(Arrays.asList("确认", "地址", "自提", "应付总额有变动，请再次确认", "商品信息变更，请重新确认", "模板需要收货地址，请联系商家", "店铺信息不能为空", "购买的商品超过限购数", "请先填写收货人地址", "请升级到最新版本后重试", "当前下单商品仅支持到店自提，请重新选择收货方式", "系统开小差，请稍后重试", "自提点地址不能为空"));
+    private static final int MAX_CREATE_ORDER_RETRY = 3;
+    private static final int MAX_RECONFIRM_RETRY = 3;
+    private static final long BASE_RETRY_INTERVAL = 100L;
     public long schedulingTime = computeSchedulingTime();
     @Resource
     private RequestsMapper requestsMapper;
@@ -68,131 +75,136 @@ public class GrabService {
 
     public static long computeSchedulingTime() {
         long startTime = System.nanoTime();
-        scheduler.schedule(() -> {
-            try {
-                long taskStartTime = System.nanoTime();
-                long schedulingTime = (taskStartTime - startTime) / 1000000L;
-                logger.info("调度花费时间：{}毫秒", schedulingTime);
-                return schedulingTime;
-            } catch (Exception e) {
-                e.printStackTrace();
-                return 2;
-            }
-        }, 0L, TimeUnit.MILLISECONDS);
-        return 2L;
-    }
-
-    public static JsonNode createOrder(HttpRequest httpRequest, Requests request) {
-        JsonNode responseBody = mapper.createObjectNode();
-        int maxRetries = 3;
-        int retryCount = 0;
-
-        while(true) {
-            if (retryCount <= maxRetries) {
-                try {
-                    HttpResponse<String> response = NetworkUtil.httpClient.send(httpRequest, BodyHandlers.ofString());
-                    responseBody = mapper.readTree((String)response.body());
-                    logger.info("ID：{} 信息：{}", request.getId(), responseBody);
-                    String message = responseBody.get("status").get("description").asText();
-                    int code = responseBody.get("status").get("code").asInt();
-                    boolean shouldRetry = message != null && Arrays.asList("请稍后再试", "拥挤", "重试", "试", "稍后", "人潮拥挤, 请稍后再试", "商品尚未开售", "开小差", "系统开小差了, 请稍后再试", "啊哦~ 人潮拥挤，请稍后重试~").contains(message);
-                    boolean shouldUpdate = message != null && Arrays.asList("确认", "地址", "自提", "应付总额有变动，请再次确认", "商品信息变更，请重新确认", "模板需要收货地址，请联系商家", "店铺信息不能为空", "购买的商品超过限购数", "请先填写收货人地址", "请升级到最新版本后重试", "当前下单商品仅支持到店自提，请重新选择收货方式", "系统开小差，请稍后重试", "自提点地址不能为空").contains(message);
-                    if (code == 0) {
-                        CommonUtil.processOrders(responseBody, request);
-                        ((ObjectNode)responseBody).put("isSuccess", 1);
-                        ((ObjectNode)responseBody).put("isContinue", false);
-                        ((ObjectNode)responseBody).put("isUpdate", false);
-                    } else if (shouldUpdate) {
-                        ((ObjectNode)responseBody).put("isSuccess", 2);
-                        ((ObjectNode)responseBody).put("isContinue", true);
-                        ((ObjectNode)responseBody).put("isUpdate", true);
-                    } else if (shouldRetry) {
-                        ((ObjectNode)responseBody).put("isSuccess", 2);
-                        ((ObjectNode)responseBody).put("isContinue", true);
-                        ((ObjectNode)responseBody).put("isUpdate", false);
-                    } else {
-                        ((ObjectNode)responseBody).put("isSuccess", 2);
-                        ((ObjectNode)responseBody).put("isContinue", false);
-                        ((ObjectNode)responseBody).put("isUpdate", false);
-                    }
-
-                    return responseBody;
-                } catch (Exception e) {
-                    ++retryCount;
-                    logger.error("ID：{} 创建订单失败 (尝试 {}/{}): {}", new Object[]{request.getId(), retryCount, maxRetries, e});
-                    if (retryCount > maxRetries) {
-                        ((ObjectNode)responseBody).put("isSuccess", 3);
-                        ((ObjectNode)responseBody).put("isContinue", true);
-                        ((ObjectNode)responseBody).put("isUpdate", false);
-                        ((ObjectNode)responseBody).put("error", getFirstThreeLinesOfStackTrace(e));
-                        logger.error("ID：{} 创建订单失败，已达到最大重试次数: {}", request.getId(), e);
-                        continue;
-                    }
-
-                    try {
-                        long baseWaitTime = (long)(Math.pow((double)2.0F, (double)retryCount) * (double)100.0F);
-                        long randomJitter = (long)((double)baseWaitTime * 0.2 * (Math.random() * (double)2.0F - (double)1.0F));
-                        long waitTime = Math.max(50L, baseWaitTime + randomJitter);
-                        logger.info("ID：{} 等待 {}ms 后重试", request.getId(), waitTime);
-                        TimeUnit.MILLISECONDS.sleep(waitTime);
-                        continue;
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        logger.error("ID：{} 重试等待被中断: {}", request.getId(), ie);
-                    }
-                }
-            }
-
-            return responseBody;
+        try {
+            return scheduler.schedule(() -> System.nanoTime() - startTime, 0L, TimeUnit.MILLISECONDS)
+                    .get(100, TimeUnit.MILLISECONDS) / 1_000_000L;
+        } catch (Exception e) {
+            logger.debug("计算调度耗时失败，使用默认值: {}", e.getMessage());
+            return 2L;
         }
     }
 
-    public static JsonNode reConfirmOrder(HttpRequest httpRequest) {
-        int maxRetries = 3;
-        int retryCount = 0;
+    public static JsonNode createOrder(HttpRequest httpRequest, Requests request) {
+        ObjectNode responseBody = mapper.createObjectNode();
 
-        while(true) {
-            if (retryCount <= maxRetries) {
-                try {
-                    HttpResponse<String> response = NetworkUtil.httpClient.send(httpRequest, BodyHandlers.ofString());
-                    JsonNode responseBody = mapper.readTree((String)response.body());
-                    if (!responseBody.has("result")) {
-                        logger.warn("reConfirmOrder没有result字段，响应内容: {}", responseBody);
-                        ++retryCount;
-                        if (retryCount <= maxRetries) {
-                            long waitTime = (long)(Math.pow((double)2.0F, (double)retryCount) * (double)80.0F);
-                            long randomJitter = (long)((double)waitTime * 0.2 * (Math.random() * (double)2.0F - (double)1.0F));
-                            waitTime = Math.max(50L, waitTime + randomJitter);
-                            logger.info("reConfirmOrder等待 {}ms 后重试 ({}/{})", new Object[]{waitTime, retryCount, maxRetries});
-                            TimeUnit.MILLISECONDS.sleep(waitTime);
-                            continue;
-                        }
-                    }
-
-                    return responseBody.get("result");
-                } catch (Exception e) {
-                    ++retryCount;
-                    logger.error("reConfirmOrder失败 (尝试 {}/{}): {}", new Object[]{retryCount, maxRetries, e.getMessage()});
-                    if (retryCount > maxRetries) {
-                        continue;
-                    }
-
-                    try {
-                        long waitTime = (long)(Math.pow((double)2.0F, (double)retryCount) * (double)80.0F);
-                        long randomJitter = (long)((double)waitTime * 0.2 * (Math.random() * (double)2.0F - (double)1.0F));
-                        waitTime = Math.max(50L, waitTime + randomJitter);
-                        logger.info("reConfirmOrder等待 {}ms 后重试", waitTime);
-                        TimeUnit.MILLISECONDS.sleep(waitTime);
-                        continue;
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        logger.error("reConfirmOrder重试等待被中断: {}", ie.getMessage());
-                    }
+        for(int retryCount = 0; retryCount <= MAX_CREATE_ORDER_RETRY; ++retryCount) {
+            try {
+                HttpResponse<String> response = NetworkUtil.httpClient.send(httpRequest, BodyHandlers.ofString());
+                JsonNode parsedBody = mapper.readTree(response.body());
+                if (parsedBody instanceof ObjectNode objectNode) {
+                    responseBody = objectNode;
+                } else {
+                    responseBody.removeAll();
+                    responseBody.set("raw", parsedBody);
                 }
-            }
 
-            logger.error("reConfirmOrder达到最大重试次数: {}", maxRetries);
-            return null;
+                logger.info("ID：{} 信息：{}", request.getId(), responseBody);
+                String message = responseBody.path("status").path("description").asText("");
+                int code = responseBody.path("status").path("code").asInt();
+                if (code == 0) {
+                    CommonUtil.processOrders(responseBody, request);
+                    responseBody.put("isSuccess", 1);
+                    responseBody.put("isContinue", false);
+                    responseBody.put("isUpdate", false);
+                } else if (shouldUpdate(message)) {
+                    responseBody.put("isSuccess", 2);
+                    responseBody.put("isContinue", true);
+                    responseBody.put("isUpdate", true);
+                } else if (shouldRetry(message)) {
+                    responseBody.put("isSuccess", 2);
+                    responseBody.put("isContinue", true);
+                    responseBody.put("isUpdate", false);
+                } else {
+                    responseBody.put("isSuccess", 2);
+                    responseBody.put("isContinue", false);
+                    responseBody.put("isUpdate", false);
+                }
+
+                return responseBody;
+            } catch (Exception e) {
+                if (retryCount >= MAX_CREATE_ORDER_RETRY) {
+                    responseBody.put("isSuccess", 3);
+                    responseBody.put("isContinue", true);
+                    responseBody.put("isUpdate", false);
+                    responseBody.put("error", getFirstThreeLinesOfStackTrace(e));
+                    logger.error("ID：{} 创建订单失败，已达到最大重试次数: {}", request.getId(), e.getMessage());
+                    break;
+                }
+
+                logger.error("ID：{} 创建订单失败 (尝试 {}/{}): {}", request.getId(), retryCount + 1, MAX_CREATE_ORDER_RETRY, e.getMessage());
+                sleepWithJitter(retryCount + 1, BASE_RETRY_INTERVAL, request.getId(), "创建订单");
+            }
+        }
+
+        return responseBody;
+    }
+
+    public static JsonNode reConfirmOrder(HttpRequest httpRequest) {
+        for(int retryCount = 0; retryCount <= MAX_RECONFIRM_RETRY; ++retryCount) {
+            try {
+                HttpResponse<String> response = NetworkUtil.httpClient.send(httpRequest, BodyHandlers.ofString());
+                JsonNode responseBody = mapper.readTree(response.body());
+                if (!responseBody.has("result")) {
+                    if (retryCount < MAX_RECONFIRM_RETRY) {
+                        logger.warn("reConfirmOrder没有result字段，响应内容: {}", responseBody);
+                        sleepWithJitter(retryCount + 1, 80L, null, "确认订单");
+                        continue;
+                    }
+                    break;
+                }
+
+                return responseBody.get("result");
+            } catch (Exception e) {
+                if (retryCount >= MAX_RECONFIRM_RETRY) {
+                    break;
+                }
+
+                logger.error("reConfirmOrder失败 (尝试 {}/{}): {}", retryCount + 1, MAX_RECONFIRM_RETRY, e.getMessage());
+                sleepWithJitter(retryCount + 1, 80L, null, "确认订单");
+            }
+        }
+
+        logger.error("reConfirmOrder达到最大重试次数: {}", MAX_RECONFIRM_RETRY);
+        return null;
+    }
+
+    private static boolean shouldRetry(String message) {
+        return messageContainsAny(message, RETRY_KEYWORDS);
+    }
+
+    private static boolean shouldUpdate(String message) {
+        return messageContainsAny(message, UPDATE_KEYWORDS);
+    }
+
+    private static boolean messageContainsAny(String message, List<String> keywords) {
+        if (message == null || message.isEmpty()) {
+            return false;
+        }
+
+        for (String keyword : keywords) {
+            if (message.contains(keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void sleepWithJitter(int attempt, long baseInterval, Integer requestId, String context) {
+        long waitTime = Math.max(50L, (long) (Math.pow(2.0D, attempt) * baseInterval));
+        long jitter = ThreadLocalRandom.current().nextLong(-waitTime / 5, waitTime / 5 + 1);
+        long finalDelay = waitTime + jitter;
+        if (requestId != null) {
+            logger.info("ID：{} 等待 {}ms 后重试{}", requestId, finalDelay, context == null ? "" : " - " + context);
+        } else {
+            logger.info("等待 {}ms 后重试{}", finalDelay, context == null ? "" : " - " + context);
+        }
+
+        try {
+            TimeUnit.MILLISECONDS.sleep(finalDelay);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            logger.error("重试等待被中断: {}", ie.getMessage());
         }
     }
 

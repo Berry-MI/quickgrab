@@ -12,8 +12,11 @@ if(DEFINED ENV{VCPKG_MANIFEST_MODE})
 endif()
 
 find_package(Boost REQUIRED COMPONENTS system json)
-find_package(OpenSSL REQUIRED)
-find_package(mysql-connector-cpp CONFIG REQUIRED)
+find_package(boost_beast CONFIG REQUIRED)
+find_package(boost_asio  CONFIG REQUIRED)
+find_package(OpenSSL     REQUIRED)
+find_package(unofficial-mysql-connector-cpp CONFIG REQUIRED)
+
 
 add_library(quickgrab_core
     src/server/HttpServer.cpp
@@ -47,20 +50,15 @@ target_include_directories(quickgrab_core
 )
 
 target_link_libraries(quickgrab_core
-    PUBLIC
-        Boost::system
-        Boost::json
-        OpenSSL::SSL
-        OpenSSL::Crypto
+  PUBLIC
+    Boost::system
+    Boost::json
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    unofficial::mysql-connector-cpp::connector
 )
 
-if(TARGET mysqlcppconn8)
-    target_link_libraries(quickgrab_core PUBLIC mysqlcppconn8)
-elif(TARGET mysqlcppconn)
-    target_link_libraries(quickgrab_core PUBLIC mysqlcppconn)
-else()
-    message(FATAL_ERROR "mysql-connector-cpp target not found")
-endif()
+
 
 
 add_executable(quickgrab_app src/main.cpp)

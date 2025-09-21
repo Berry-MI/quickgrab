@@ -1,4 +1,4 @@
-#include \"quickgrab/controller/StatisticsController.hpp\"
+#include "quickgrab/controller/StatisticsController.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>

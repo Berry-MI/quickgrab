@@ -1,6 +1,6 @@
 #pragma once
 
-#include \"quickgrab/server/Router.hpp\"
+#include "quickgrab/server/Router.hpp"
 
 namespace quickgrab::controller {
 

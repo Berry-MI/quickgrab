@@ -1,9 +1,9 @@
 #pragma once
 
-#include \"quickgrab/model/Request.hpp\"
-#include \"quickgrab/proxy/ProxyPool.hpp\"
-#include \"quickgrab/util/HttpClient.hpp\"
-#include \"quickgrab/util/Logging.hpp\"
+#include "quickgrab/model/Request.hpp"
+#include "quickgrab/proxy/ProxyPool.hpp"
+#include "quickgrab/util/HttpClient.hpp"
+#include "quickgrab/util/Logging.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/steady_timer.hpp>

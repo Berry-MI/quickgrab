@@ -1,4 +1,4 @@
-#include \"quickgrab/util/Logging.hpp\"
+#include "quickgrab/util/Logging.hpp"
 
 #include <ctime>
 #include <iomanip>

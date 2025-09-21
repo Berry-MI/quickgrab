@@ -1,4 +1,4 @@
-#include \"quickgrab/util/JsonUtil.hpp\"
+#include "quickgrab/util/JsonUtil.hpp"
 
 namespace quickgrab::util {
 

@@ -1,4 +1,4 @@
-#include \"quickgrab/server/Router.hpp\"
+#include "quickgrab/server/Router.hpp"
 
 #include <algorithm>
 #include <cctype>

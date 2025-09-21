@@ -1,12 +1,14 @@
 #pragma once
 
-#include \"quickgrab/model/Request.hpp\"
-#include \"quickgrab/repository/MySqlConnectionPool.hpp\"
+#include "quickgrab/model/Request.hpp"
+#include "quickgrab/repository/MySqlConnectionPool.hpp"
+
 
 #include <mysqlx/xdevapi.h>
 
 #include <string>
 #include <vector>
+
 
 namespace quickgrab::repository {
 
@@ -20,7 +22,9 @@ public:
     void deleteById(int requestId);
 
 private:
+
     model::Request mapRow(mysqlx::Row row);
+
 
     MySqlConnectionPool& pool_;
 };

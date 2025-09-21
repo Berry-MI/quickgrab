@@ -1,4 +1,4 @@
-#include \"quickgrab/service/ProxyService.hpp\"
+#include "quickgrab/service/ProxyService.hpp"
 
 #include <boost/asio/steady_timer.hpp>
 

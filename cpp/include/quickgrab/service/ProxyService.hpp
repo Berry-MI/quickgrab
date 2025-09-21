@@ -1,6 +1,6 @@
 #pragma once
 
-#include \"quickgrab/proxy/ProxyPool.hpp\"
+#include "quickgrab/proxy/ProxyPool.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/steady_timer.hpp>

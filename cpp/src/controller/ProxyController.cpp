@@ -25,6 +25,7 @@ namespace quickgrab::controller {
 
 namespace {
 
+
 constexpr char kDesktopUA[] =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
 constexpr char kMobileUA[] =
@@ -478,6 +479,7 @@ std::string resolveAffinityKey(const std::unordered_map<std::string, std::string
     }
     return trimmedFallback;
 }
+
 void proxyResponseToContext(quickgrab::server::RequestContext& ctx,
                             const HttpClient::HttpResponse& response) {
     ctx.response.result(response.result());
@@ -714,7 +716,9 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetListCart(quickgrab::server::RequestContext& ctx) {
+}
+
+void ProxyController::handleGetListCart(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -760,7 +764,8 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetUserInfo(quickgrab::server::RequestContext& ctx) {
+}
+void ProxyController::handleGetUserInfo(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -804,7 +809,9 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleGetAddOrderData(quickgrab::server::RequestContext& ctx) {
+}
+
+void ProxyController::handleGetAddOrderData(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 
@@ -866,7 +873,8 @@ void ProxyController::handleLoginByVcode(quickgrab::server::RequestContext& ctx)
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
-}\n\nvoid ProxyController::handleProxyRequest(quickgrab::server::RequestContext& ctx) {
+}
+void ProxyController::handleProxyRequest(quickgrab::server::RequestContext& ctx) {
     auto form = parseFormUrlEncoded(ctx.request.body());
     auto queryParams = parseQueryParameters(ctx.request.target());
 

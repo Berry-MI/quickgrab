@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iomanip>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -323,6 +324,152 @@ std::optional<std::string> parseBoundary(const quickgrab::server::RequestContext
         boundary = boundary.substr(1, boundary.size() - 2);
     }
     return boundary;
+}
+
+std::string trim(const std::string& value) {
+    auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) { return std::isspace(ch); });
+    auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) { return std::isspace(ch); }).base();
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
+bool parseBoolString(const std::string& value) {
+    auto trimmed = trim(value);
+    if (trimmed.empty()) {
+        return false;
+    }
+    std::string lowered;
+    lowered.reserve(trimmed.size());
+    std::transform(trimmed.begin(), trimmed.end(), std::back_inserter(lowered), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+
+    if (lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on" || lowered == "y") {
+        return true;
+    }
+    if (lowered == "0" || lowered == "false" || lowered == "no" || lowered == "off" || lowered == "n") {
+        return false;
+    }
+    return false;
+}
+
+bool shouldUseProxy(const std::unordered_map<std::string, std::string>& queryParams,
+                    const std::unordered_map<std::string, std::string>& formParams) {
+    auto resolveFlag = [](const auto& container, const char* key) -> std::optional<bool> {
+        if (auto it = container.find(key); it != container.end()) {
+            return parseBoolString(it->second);
+        }
+        return std::nullopt;
+    };
+
+    if (auto flag = resolveFlag(formParams, "useProxy")) {
+        return *flag;
+    }
+    if (auto flag = resolveFlag(queryParams, "useProxy")) {
+        return *flag;
+    }
+    if (auto flag = resolveFlag(formParams, "proxy")) {
+        return *flag;
+    }
+    if (auto flag = resolveFlag(queryParams, "proxy")) {
+        return *flag;
+    }
+
+    auto hasAffinity = [](const auto& container, const char* key) {
+        if (auto it = container.find(key); it != container.end()) {
+            return !trim(it->second).empty();
+        }
+        return false;
+    };
+
+    if (hasAffinity(formParams, "proxyAffinity") || hasAffinity(queryParams, "proxyAffinity")) {
+        return true;
+    }
+    if (hasAffinity(formParams, "affinity") || hasAffinity(queryParams, "affinity")) {
+        return true;
+    }
+
+    return false;
+}
+
+std::string hostFromUrl(const std::string& value) {
+    auto schemePos = value.find("://");
+    std::size_t hostStart = schemePos == std::string::npos ? 0 : schemePos + 3;
+    auto pathPos = value.find('/', hostStart);
+    std::string host = value.substr(hostStart, pathPos == std::string::npos ? std::string::npos : pathPos - hostStart);
+    auto atPos = host.find('@');
+    if (atPos != std::string::npos) {
+        host = host.substr(atPos + 1);
+    }
+    auto colonPos = host.find(':');
+    if (colonPos != std::string::npos) {
+        host = host.substr(0, colonPos);
+    }
+    return trim(host);
+}
+
+std::string resolveAffinityKey(const std::unordered_map<std::string, std::string>& queryParams,
+                               const std::unordered_map<std::string, std::string>& formParams,
+                               const std::string& fallback) {
+    auto resolveFrom = [](const auto& container, std::initializer_list<const char*> keys) -> std::optional<std::string> {
+        for (auto key : keys) {
+            if (auto it = container.find(key); it != container.end()) {
+                auto trimmed = trim(it->second);
+                if (!trimmed.empty()) {
+                    return trimmed;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+
+    auto resolve = [&](std::initializer_list<const char*> keys) -> std::optional<std::string> {
+        if (auto value = resolveFrom(formParams, keys)) {
+            return value;
+        }
+        if (auto value = resolveFrom(queryParams, keys)) {
+            return value;
+        }
+        return std::nullopt;
+    };
+
+    if (auto affinity = resolve({"proxyAffinity", "affinity"})) {
+        return *affinity;
+    }
+    if (auto thread = resolve({"threadId", "thread_id"})) {
+        return *thread;
+    }
+    if (auto device = resolve({"deviceId", "device_id"})) {
+        return *device;
+    }
+    if (auto buyer = resolve({"buyerId", "buyer_id"})) {
+        return *buyer;
+    }
+    if (auto cookie = resolve({"cookie"})) {
+        return *cookie;
+    }
+    if (auto phone = resolve({"phone"})) {
+        return *phone;
+    }
+    if (auto url = resolve({"url"})) {
+        auto host = hostFromUrl(*url);
+        if (!host.empty()) {
+            return host;
+        }
+        return *url;
+    }
+
+    auto trimmedFallback = trim(fallback);
+    if (trimmedFallback.empty()) {
+        return "default";
+    }
+    auto host = hostFromUrl(trimmedFallback);
+    if (!host.empty()) {
+        return host;
+    }
+    return trimmedFallback;
 }
 void proxyResponseToContext(quickgrab::server::RequestContext& ctx,
                             const HttpClient::HttpResponse& response) {

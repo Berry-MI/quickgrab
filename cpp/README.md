@@ -16,21 +16,22 @@ cmake --build build
 - boost-json
 - boost-system
 - openssl
-- mysql-connector-cpp
+- mysql-connector-cpp (X DevAPI)
 
 ## 工程结构
 
-- src/main.cpp：启动入口，负责装配 HTTP 服务器、MySQL 连接池、仓储与业务服务。
+- src/main.cpp：启动入口，负责装配 HTTP 服务器、MySQL X DevAPI 连接池、仓储与业务服务。
 - server/：基于 Beast 的 HTTP Server、Router、RequestContext，替代 Spring MVC。
 - controller/：REST 接口层（抢购、代理、查询）。
 - service/：业务逻辑（GrabService、ProxyService、QueryService）。
 - workflow/GrabWorkflow：封装抢购状态机、重试与 ReConfirm/CreateOrder 调用。
 - proxy/ProxyPool：代理池，提供粘滞分配、失败退避、快照导出。
-- epository/：MySqlConnectionPool、RequestsRepository、ResultsRepository 通过 MySQL Connector/C++ 读取/写入表数据。
-- util/：代理感知的 HttpClient、JSON/日志工具。
-- model/：与 Java 实体对应的简单数据结构。
+- repository/：MySqlConnectionPool、RequestsRepository、ResultsRepository 通过 MySQL Connector/C++ X DevAPI 读取/写入表数据。
+默认在 cpp/data/database.json 加载数据库连接（如缺失则使用 127.0.0.1:33060/grab_system）；可通过环境变量 QUICKGRAB_DB_HOST/PORT/USER/PASSWORD/NAME/POOL 覆盖。
+| RequestsMapper.java | repository/RequestsRepository（基于 MySQL） |
+| ResultsMapper.java | repository/ResultsRepository |
 
-默认在 cpp/data/database.json 加载数据库连接（如缺失则使用 127.0.0.1:3306/grab_system）；可通过环境变量 QUICKGRAB_DB_HOST/PORT/USER/PASSWORD/NAME/POOL 覆盖。
+5. 若需要多实例协同，可结合分布式锁或消息队列实现任务调度一致性。
 
 ## 代理池与抢购流程
 

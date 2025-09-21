@@ -2,8 +2,7 @@
 
 #include "quickgrab/repository/DatabaseConfig.hpp"
 
-#include <cppconn/connection.h>
-#include <mysql_driver.h>
+#include <mysqlx/xdevapi.h>
 
 #include <condition_variable>
 #include <memory>
@@ -16,22 +15,23 @@ class MySqlConnectionPool {
 public:
     explicit MySqlConnectionPool(DatabaseConfig config);
 
-    std::shared_ptr<sql::Connection> acquire();
+    std::shared_ptr<mysqlx::Session> acquire();
+
+    const std::string& schemaName() const noexcept { return config_.database; }
 
 private:
-    struct ConnectionDeleter {
+    struct SessionDeleter {
         MySqlConnectionPool* pool;
-        void operator()(sql::Connection* conn) const noexcept;
+        void operator()(mysqlx::Session* session) const noexcept;
     };
 
-    std::unique_ptr<sql::Connection> createConnection();
-    void release(sql::Connection* conn);
+    std::unique_ptr<mysqlx::Session> createSession();
+    void release(mysqlx::Session* session);
 
     DatabaseConfig config_;
-    sql::mysql::MySQL_Driver* driver_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::vector<std::unique_ptr<sql::Connection>> idle_;
+    std::vector<std::unique_ptr<mysqlx::Session>> idle_;
     unsigned int currentSize_{};
 };
 

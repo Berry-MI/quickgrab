@@ -190,6 +190,7 @@ void RequestsRepository::updateThreadId(int requestId, const std::string& thread
 
 void RequestsRepository::deleteById(int requestId) {
     auto session = pool_.acquire();
+
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
@@ -199,6 +200,7 @@ void RequestsRepository::deleteById(int requestId) {
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Delete request failed: "} + err.what());
+
         throw;
     }
 }

@@ -249,6 +249,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     throw boost::system::system_error(ec);
                 }
 
+
                 proxyPool_.reportSuccess(affinityKey, *proxy);
                 return response;
             }
@@ -262,6 +263,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
                 proxiedRequest.set("Proxy-Authorization", auth);
             }
+
 
             boost::beast::http::write(stream, proxiedRequest);
             boost::beast::flat_buffer buffer;
@@ -279,6 +281,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
             proxyPool_.reportSuccess(affinityKey, *proxy);
             return response;
+
         }
 
         boost::asio::ip::tcp::resolver resolver(io_);
@@ -310,6 +313,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             return response;
         }
 
+
         boost::beast::tcp_stream stream(io_);
         stream.expires_after(timeout);
         stream.connect(results);
@@ -329,6 +333,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
         }
         throw;
     }
+
 }
 
 HttpClient::HttpResponse HttpClient::fetch(const std::string& method,

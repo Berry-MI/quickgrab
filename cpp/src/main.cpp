@@ -44,7 +44,7 @@ using quickgrab::proxy::ProxyEndpoint;
 repository::DatabaseConfig loadDatabaseConfig(const std::filesystem::path& path) {
     repository::DatabaseConfig config;
     config.host = "127.0.0.1";
-    config.port = 3306;
+    config.port = 33060;
     config.user = "root";
     config.password.clear();
     config.database = "grab_system";

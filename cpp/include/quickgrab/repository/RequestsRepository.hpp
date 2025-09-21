@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
-namespace sql {
-class ResultSet;
+namespace mysqlx {
+class Row;
 }
 
 namespace quickgrab::repository {
@@ -22,7 +22,7 @@ public:
     void deleteById(int requestId);
 
 private:
-    model::Request mapRow(sql::ResultSet& rs);
+    model::Request mapRow(const mysqlx::Row& row);
 
     MySqlConnectionPool& pool_;
 };

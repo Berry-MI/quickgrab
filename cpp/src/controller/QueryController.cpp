@@ -188,8 +188,8 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("GET", "/getRequests", [this](auto& ctx) { handleGetRequests(ctx); });
     router.addRoute("GET", "/getResults", [this](auto& ctx) { handleGetResults(ctx); });
     router.addRoute("DELETE", "/deleteRequest/:id", [this](auto& ctx) {
-        auto it = ctx.pathParams.find("id");
-        if (it == ctx.pathParams.end()) {
+        auto it = ctx.pathParameters.find("id");
+        if (it == ctx.pathParameters.end()) {
             sendNotFound(ctx);
             return;
         }
@@ -200,8 +200,8 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
         }
     });
     router.addRoute("DELETE", "/deleteResult/:id", [this](auto& ctx) {
-        auto it = ctx.pathParams.find("id");
-        if (it == ctx.pathParams.end()) {
+        auto it = ctx.pathParameters.find("id");
+        if (it == ctx.pathParameters.end()) {
             sendNotFound(ctx);
             return;
         }
@@ -212,8 +212,8 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
         }
     });
     router.addRoute("GET", "/getResult/:id", [this](auto& ctx) {
-        auto it = ctx.pathParams.find("id");
-        if (it == ctx.pathParams.end()) {
+        auto it = ctx.pathParameters.find("id");
+        if (it == ctx.pathParameters.end()) {
             sendNotFound(ctx);
             return;
         }

@@ -30,16 +30,18 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     return oss.str();
 }
 
+mysqlx::Value makeNullValue() { return mysqlx::Value(); }
+
 mysqlx::Value toTimestampValue(const std::chrono::system_clock::time_point& tp) {
     if (tp.time_since_epoch().count() == 0) {
-        return mysqlx::Value(mysqlx::nullValue);
+        return makeNullValue();
     }
     return mysqlx::Value(formatTimestamp(tp));
 }
 
 mysqlx::Value jsonOrNull(const boost::json::value& value) {
     if (value.is_null()) {
-        return mysqlx::Value(mysqlx::nullValue);
+        return makeNullValue();
     }
     return mysqlx::Value(quickgrab::util::stringifyJson(value));
 }

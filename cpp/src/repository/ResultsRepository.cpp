@@ -3,6 +3,7 @@
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
+#include <mysqlx/common/value.h>
 #include <mysqlx/xdevapi.h>
 
 #include <algorithm>
@@ -87,19 +88,51 @@ boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string
     }
 }
 
-std::chrono::system_clock::time_point parseDateTimeValue(const mysqlx::Value& value,
-                                                         const std::chrono::system_clock::time_point& fallback = {}) {
+std::chrono::system_clock::time_point fromTm(const std::tm& tm) {
+    auto localTm = tm;
+    return std::chrono::system_clock::from_time_t(std::mktime(&localTm));
+}
+
+std::chrono::system_clock::time_point fromDateTime(const mysqlx::datetime& dt) {
+    std::tm tm{};
+    tm.tm_year = static_cast<int>(dt.year) - 1900;
+    tm.tm_mon = static_cast<int>(dt.month) - 1;
+    tm.tm_mday = static_cast<int>(dt.day);
+    tm.tm_hour = static_cast<int>(dt.hour);
+    tm.tm_min = static_cast<int>(dt.minute);
+    tm.tm_sec = static_cast<int>(dt.second);
+    auto time = fromTm(tm);
+    if (dt.microsecond > 0) {
+        time += std::chrono::microseconds(dt.microsecond);
+    }
+    return time;
+}
+
+std::chrono::system_clock::time_point parseDateTimeValue(
+    const mysqlx::Value& value,
+    const std::chrono::system_clock::time_point& fallback = std::chrono::system_clock::now()) {
     if (value.isNull()) {
         return fallback;
     }
     try {
-        std::tm tm{};
-        std::istringstream iss(value.get<std::string>());
-        iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-        if (iss.fail()) {
-            return fallback;
+        switch (value.getType()) {
+        case mysqlx::Value::Type::V_STRING:
+        case mysqlx::Value::Type::V_BYTES: {
+            std::tm tm{};
+            std::istringstream iss(value.get<std::string>());
+            iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+            if (iss.fail()) {
+                util::log(util::LogLevel::warn, "Failed to parse datetime text value");
+                return fallback;
+            }
+            return fromTm(tm);
         }
-        return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+        case mysqlx::Value::Type::V_DATETIME:
+            return fromDateTime(value.get<mysqlx::datetime>());
+        default:
+            break;
+        }
+        return fallback;
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
         return fallback;
@@ -219,33 +252,30 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
                "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
                "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE 1=1";
+
+        std::vector<mysqlx::Value> params;
         if (keyword && !keyword->empty()) {
-            sql << " AND (user_info LIKE :keyword)";
+            sql << " AND (user_info LIKE ?)";
+            params.emplace_back("%" + *keyword + "%");
         }
         if (buyerId) {
-            sql << " AND buyer_id = :buyerId";
+            sql << " AND buyer_id = ?";
+            params.emplace_back(*buyerId);
         }
         if (type) {
-            sql << " AND type = :type";
+            sql << " AND type = ?";
+            params.emplace_back(*type);
         }
         if (status) {
-            sql << " AND status = :status";
+            sql << " AND status = ?";
+            params.emplace_back(*status);
         }
         sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
         sql << buildLimitOffsetClause(limit, offset);
 
         auto stmt = session->sql(sql.str());
-        if (keyword && !keyword->empty()) {
-            stmt.bind("keyword", "%" + *keyword + "%");
-        }
-        if (buyerId) {
-            stmt.bind("buyerId", *buyerId);
-        }
-        if (type) {
-            stmt.bind("type", *type);
-        }
-        if (status) {
-            stmt.bind("status", *status);
+        for (const auto& param : params) {
+            stmt.bind(param);
         }
 
         auto rows = stmt.execute();

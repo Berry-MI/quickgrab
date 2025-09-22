@@ -64,10 +64,6 @@ public:
                                            const std::optional<int>& status);
 
 private:
-    model::Result mapRow(mysqlx::Row row);
-    model::Result mapDetailedRow(mysqlx::Row row);
-    std::chrono::system_clock::time_point parseTimestamp(const std::string& value);
-
     MySqlConnectionPool& pool_;
 };
 

@@ -183,17 +183,37 @@ int readInt(const mysqlx::Value& value, const std::string& column, int defaultVa
 
 using ColumnIndex = std::unordered_map<std::string, std::size_t>;
 
-ColumnIndex buildColumnIndex(const mysqlx::Row& row) {
+ColumnIndex buildColumnIndex(const mysqlx::RowResult& rows) {
     ColumnIndex index;
-    index.reserve(row.colCount());
-    for (std::size_t i = 0; i < row.colCount(); ++i) {
-        try {
-            auto name = row.getColumn(i).getColumnName();
-            index.emplace(std::move(name), i);
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn,
-                      std::string{"Failed to read column metadata: "} + ex.what());
+    try {
+        auto columns = rows.getColumns();
+        for (std::size_t position = 0; position < columns.count(); ++position) {
+            auto column = columns[position];
+            try {
+                std::string name;
+                try {
+                    name = column.getColumnLabel();
+                } catch (const std::exception&) {
+                    name.clear();
+                }
+                if (name.empty()) {
+                    try {
+                        name = column.getColumnName();
+                    } catch (const std::exception&) {
+                        name.clear();
+                    }
+                }
+                if (!name.empty()) {
+                    index.emplace(std::move(name), position);
+                }
+            } catch (const std::exception& ex) {
+                util::log(util::LogLevel::warn,
+                          std::string{"Failed to read column metadata: "} + ex.what());
+            }
         }
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn,
+                  std::string{"Failed to inspect column metadata: "} + ex.what());
     }
     return index;
 }
@@ -205,6 +225,118 @@ const mysqlx::Value* findValue(const mysqlx::Row& row, const ColumnIndex& index,
     }
     return &row[it->second];
 }
+ 
+std::chrono::system_clock::time_point parseTimestamp(const std::string& value) {
+    if (value.empty()) {
+        return std::chrono::system_clock::now();
+    }
+    std::tm tm{};
+    std::istringstream iss(sanitizeDateTimeString(value));
+    iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+    if (iss.fail()) {
+        return std::chrono::system_clock::now();
+    }
+    auto localTm = tm;
+    return std::chrono::system_clock::from_time_t(std::mktime(&localTm));
+}
+
+model::Result mapDetailedRow(const mysqlx::Row& row, const ColumnIndex& index) {
+    model::Result result{};
+    if (row.colCount() == 0) {
+        return result;
+    }
+
+    if (const auto* value = findValue(row, index, "id")) {
+        result.id = readInt(*value, "id");
+    }
+    if (const auto* value = findValue(row, index, "request_id")) {
+        result.requestId = readInt(*value, "request_id");
+    }
+    if (const auto* value = findValue(row, index, "device_id")) {
+        result.deviceId = readInt(*value, "device_id");
+    }
+    if (const auto* value = findValue(row, index, "buyer_id")) {
+        result.buyerId = readInt(*value, "buyer_id");
+    }
+    if (const auto* value = findValue(row, index, "thread_id")) {
+        result.threadId = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "link")) {
+        result.link = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "cookies")) {
+        result.cookies = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "order_info")) {
+        result.orderInfo = parseJsonColumn(*value, "order_info");
+    }
+    if (const auto* value = findValue(row, index, "user_info")) {
+        result.userInfo = parseJsonColumn(*value, "user_info");
+    }
+    if (const auto* value = findValue(row, index, "order_template")) {
+        result.orderTemplate = parseJsonColumn(*value, "order_template");
+    }
+    if (const auto* value = findValue(row, index, "message")) {
+        result.message = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "id_number")) {
+        result.idNumber = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "keyword")) {
+        result.keyword = readString(*value);
+    }
+    if (const auto* value = findValue(row, index, "start_time")) {
+        result.startTime = parseDateTimeValue(*value, {});
+    }
+    if (const auto* value = findValue(row, index, "end_time")) {
+        result.endTime = parseDateTimeValue(*value, {});
+    }
+    if (const auto* value = findValue(row, index, "quantity")) {
+        result.quantity = readInt(*value, "quantity");
+    }
+    if (const auto* value = findValue(row, index, "delay")) {
+        result.delay = readInt(*value, "delay");
+    }
+    if (const auto* value = findValue(row, index, "frequency")) {
+        result.frequency = readInt(*value, "frequency");
+    }
+    if (const auto* value = findValue(row, index, "type")) {
+        result.type = readInt(*value, "type");
+    }
+    if (const auto* value = findValue(row, index, "status")) {
+        result.status = readInt(*value, "status");
+    }
+    if (const auto* value = findValue(row, index, "response_message")) {
+        result.responseMessage = parseJsonColumn(*value, "response_message");
+        if (result.payload.is_null()) {
+            result.payload = result.responseMessage;
+        }
+    }
+    if (const auto* value = findValue(row, index, "actual_earnings")) {
+        result.actualEarnings = readDouble(*value);
+    }
+    if (const auto* value = findValue(row, index, "estimated_earnings")) {
+        result.estimatedEarnings = readDouble(*value);
+    }
+    if (const auto* value = findValue(row, index, "extension")) {
+        result.extension = parseJsonColumn(*value, "extension");
+    }
+    if (const auto* value = findValue(row, index, "payload")) {
+        auto payload = parseJsonColumn(*value, "payload");
+        if (!payload.is_null()) {
+            result.payload = std::move(payload);
+        }
+    }
+    if (const auto* value = findValue(row, index, "created_at")) {
+        try {
+            result.createdAt = parseTimestamp(valueToString(*value));
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"Failed to parse result created_at: "} + ex.what());
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 ResultsRepository::ResultsRepository(MySqlConnectionPool& pool)
@@ -279,8 +411,9 @@ std::optional<model::Result> ResultsRepository::findById(int resultId) {
                "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
                "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE id = :id";
         auto rows = session->sql(sql.str()).bind("id", resultId).execute();
+        auto index = buildColumnIndex(rows);
         for (mysqlx::Row row : rows) {
-            return mapDetailedRow(row);
+            return mapDetailedRow(row, index);
         }
         return std::nullopt;
     } catch (const mysqlx::Error& err) {
@@ -346,8 +479,9 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         }
 
         auto rows = stmt.execute();
+        auto index = buildColumnIndex(rows);
         for (mysqlx::Row row : rows) {
-            results.emplace_back(mapDetailedRow(row));
+            results.emplace_back(mapDetailedRow(row, index));
         }
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"按条件查询抢购结果失败: "} + err.what());
@@ -503,122 +637,6 @@ std::vector<ResultsRepository::HourlyStat> ResultsRepository::getHourlyStats(con
         throw;
     }
     return items;
-}
-
-model::Result ResultsRepository::mapRow(mysqlx::Row row) {
-    return mapDetailedRow(std::move(row));
-}
-
-model::Result ResultsRepository::mapDetailedRow(mysqlx::Row row) {
-    model::Result result{};
-    if (row.colCount() == 0) {
-        return result;
-    }
-
-    auto index = buildColumnIndex(row);
-
-    if (const auto* value = findValue(row, index, "id")) {
-        result.id = readInt(*value, "id");
-    }
-    if (const auto* value = findValue(row, index, "request_id")) {
-        result.requestId = readInt(*value, "request_id");
-    }
-    if (const auto* value = findValue(row, index, "device_id")) {
-        result.deviceId = readInt(*value, "device_id");
-    }
-    if (const auto* value = findValue(row, index, "buyer_id")) {
-        result.buyerId = readInt(*value, "buyer_id");
-    }
-    if (const auto* value = findValue(row, index, "thread_id")) {
-        result.threadId = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "link")) {
-        result.link = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "cookies")) {
-        result.cookies = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "order_info")) {
-        result.orderInfo = parseJsonColumn(*value, "order_info");
-    }
-    if (const auto* value = findValue(row, index, "user_info")) {
-        result.userInfo = parseJsonColumn(*value, "user_info");
-    }
-    if (const auto* value = findValue(row, index, "order_template")) {
-        result.orderTemplate = parseJsonColumn(*value, "order_template");
-    }
-    if (const auto* value = findValue(row, index, "message")) {
-        result.message = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "id_number")) {
-        result.idNumber = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "keyword")) {
-        result.keyword = readString(*value);
-    }
-    if (const auto* value = findValue(row, index, "start_time")) {
-        result.startTime = parseDateTimeValue(*value, {});
-    }
-    if (const auto* value = findValue(row, index, "end_time")) {
-        result.endTime = parseDateTimeValue(*value, {});
-    }
-    if (const auto* value = findValue(row, index, "quantity")) {
-        result.quantity = readInt(*value, "quantity");
-    }
-    if (const auto* value = findValue(row, index, "delay")) {
-        result.delay = readInt(*value, "delay");
-    }
-    if (const auto* value = findValue(row, index, "frequency")) {
-        result.frequency = readInt(*value, "frequency");
-    }
-    if (const auto* value = findValue(row, index, "type")) {
-        result.type = readInt(*value, "type");
-    }
-    if (const auto* value = findValue(row, index, "status")) {
-        result.status = readInt(*value, "status");
-    }
-    if (const auto* value = findValue(row, index, "response_message")) {
-        result.responseMessage = parseJsonColumn(*value, "response_message");
-        if (result.payload.is_null()) {
-            result.payload = result.responseMessage;
-        }
-    }
-    if (const auto* value = findValue(row, index, "actual_earnings")) {
-        result.actualEarnings = readDouble(*value);
-    }
-    if (const auto* value = findValue(row, index, "estimated_earnings")) {
-        result.estimatedEarnings = readDouble(*value);
-    }
-    if (const auto* value = findValue(row, index, "extension")) {
-        result.extension = parseJsonColumn(*value, "extension");
-    }
-    if (const auto* value = findValue(row, index, "payload")) {
-        auto payload = parseJsonColumn(*value, "payload");
-        if (!payload.is_null()) {
-            result.payload = std::move(payload);
-        }
-    }
-    if (const auto* value = findValue(row, index, "created_at")) {
-        try {
-            result.createdAt = parseTimestamp(valueToString(*value));
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn, std::string{"Failed to parse result created_at: "} + ex.what());
-        }
-    }
-    return result;
-}
-
-std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const std::string& value) {
-    if (value.empty()) {
-        return std::chrono::system_clock::now();
-    }
-    std::tm tm{};
-    std::istringstream iss(sanitizeDateTimeString(value));
-    iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-    if (iss.fail()) {
-        return std::chrono::system_clock::now();
-    }
-    return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
 } // namespace quickgrab::repository

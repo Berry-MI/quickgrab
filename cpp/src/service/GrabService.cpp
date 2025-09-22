@@ -33,8 +33,6 @@ GrabService::GrabService(boost::asio::io_context& io,
     , prestartTime_(std::chrono::system_clock::now())
     , schedulingTime_(computeSchedulingTime()) {}
 
-
-
 void GrabService::processPending() {
     boost::asio::post(worker_, [this]() {
         auto pending = requests_.findPending(50);

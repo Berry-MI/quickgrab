@@ -98,6 +98,29 @@ std::string readString(const mysqlx::Value& value) {
     }
 }
 
+static std::int64_t asInt64(const mysqlx::Value& v, const std::string& colname) {
+    if (v.isNull()) return 0;
+    try {
+        return v.get<std::int64_t>();
+    }
+    catch (const std::exception&) {
+        try {
+            return static_cast<std::int64_t>(v.get<double>());
+        }
+        catch (const std::exception&) {
+            try {
+                auto text = valueToString(v);
+                if (!text.empty()) return std::stoll(text);
+            }
+            catch (const std::exception& ex) {
+                util::log(util::LogLevel::warn,
+                    "asInt64 failed on [" + colname + "]: " + ex.what());
+            }
+            return 0;
+        }
+    }
+}
+
 double readDouble(const mysqlx::Value& value) {
     if (value.isNull()) {
         return 0.0;
@@ -186,37 +209,38 @@ using ColumnIndex = std::unordered_map<std::string, std::size_t>;
 ColumnIndex buildColumnIndex(const mysqlx::RowResult& rows) {
     ColumnIndex index;
     try {
-        auto columns = rows.getColumns();
-        for (std::size_t position = 0; position < columns.count(); ++position) {
-            auto column = columns[position];
+        const mysqlx::col_count_t n = rows.getColumnCount(); 
+        for (mysqlx::col_count_t pos = 0; pos < n; ++pos) {
+            const auto& column = rows.getColumn(pos);        
+
             try {
                 std::string name;
-                try {
-                    name = column.getColumnLabel();
-                } catch (const std::exception&) {
-                    name.clear();
-                }
+                try { name = column.getColumnLabel(); }       
+                catch (...) { name.clear(); }
+
                 if (name.empty()) {
-                    try {
-                        name = column.getColumnName();
-                    } catch (const std::exception&) {
-                        name.clear();
-                    }
+                    try { name = column.getColumnName(); }    
+                    catch (...) { name.clear(); }
                 }
+
                 if (!name.empty()) {
-                    index.emplace(std::move(name), position);
+                    index.emplace(std::move(name),
+                        static_cast<std::size_t>(pos));
                 }
-            } catch (const std::exception& ex) {
+            }
+            catch (const std::exception& ex) {
                 util::log(util::LogLevel::warn,
-                          std::string{"Failed to read column metadata: "} + ex.what());
+                    std::string{ "Failed to read column metadata: " } + ex.what());
             }
         }
-    } catch (const std::exception& ex) {
+    }
+    catch (const std::exception& ex) {
         util::log(util::LogLevel::warn,
-                  std::string{"Failed to inspect column metadata: "} + ex.what());
+            std::string{ "Failed to inspect column metadata: " } + ex.what());
     }
     return index;
 }
+
 
 const mysqlx::Value* findValue(const mysqlx::Row& row, const ColumnIndex& index, std::string_view column) {
     auto it = index.find(std::string(column));
@@ -437,21 +461,26 @@ void ResultsRepository::deleteById(int resultId) {
     }
 }
 
-std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<std::string>& keyword,
-                                                            const std::optional<int>& buyerId,
-                                                            const std::optional<int>& type,
-                                                            const std::optional<int>& status,
-                                                            std::string_view orderColumn,
-                                                            std::string_view orderDirection,
-                                                            int offset,
-                                                            int limit) {
+std::vector<model::Result> ResultsRepository::findByFilters(
+    const std::optional<std::string>& keyword,
+    const std::optional<int>& buyerId,
+    const std::optional<int>& type,
+    const std::optional<int>& status,
+    std::string_view orderColumn,
+    std::string_view orderDirection,
+    int offset,
+    int limit) {
     std::vector<model::Result> results;
     auto session = pool_.acquire();
     try {
         std::ostringstream sql;
-        sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
-               "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
-               "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE 1=1";
+        sql << "SELECT id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
+            "message, id_number, keyword, "
+            "DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time, "
+            "DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time, "
+            "quantity, delay, frequency, type, status, response_message, "
+            "actual_earnings, estimated_earnings, extension "
+            "FROM results WHERE 1=1";
 
         std::vector<mysqlx::Value> params;
         if (keyword && !keyword->empty()) {
@@ -483,12 +512,14 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         for (mysqlx::Row row : rows) {
             results.emplace_back(mapDetailedRow(row, index));
         }
-    } catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error, std::string{"按条件查询抢购结果失败: "} + err.what());
+    }
+    catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{ "按条件查询抢购结果失败: " } + err.what());
         throw;
     }
     return results;
 }
+
 
 std::vector<ResultsRepository::AggregatedStats> ResultsRepository::getStatistics(const std::optional<int>& buyerId,
                                                                                 const std::optional<std::string>& startTime,
@@ -513,34 +544,31 @@ std::vector<ResultsRepository::AggregatedStats> ResultsRepository::getStatistics
             sql << " WHERE 1=1";
         }
         if (buyerId) {
-            sql << " AND buyer_id = :buyerId";
+            sql << " AND buyer_id = ?";
         }
         if (startTime) {
-            sql << " AND start_time >= :startTime";
+            sql << " AND start_time >= ?";
         }
         if (endTime) {
-            sql << " AND start_time <= :endTime";
+            sql << " AND start_time <= ?";
         }
         sql << " GROUP BY type WITH ROLLUP UNION ALL SELECT '1' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '2' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '3' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT 'total' AS type, 0, 0, 0, 0, 0, 0, 0, 0 ) AS stats GROUP BY type";
 
         auto stmt = session->sql(sql.str());
-        if (buyerId) {
-            stmt.bind("buyerId", *buyerId);
-        }
-        if (startTime) {
-            stmt.bind("startTime", *startTime);
-        }
-        if (endTime) {
-            stmt.bind("endTime", *endTime);
-        }
+        if (buyerId) 
+            stmt.bind(*buyerId);
+        if (startTime) 
+            stmt.bind(*startTime);
+        if (endTime) 
+            stmt.bind(*endTime);
         auto rows = stmt.execute();
         for (mysqlx::Row row : rows) {
             AggregatedStats entry{};
             entry.type = readString(row[0]);
-            entry.successCount = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
-            entry.failureCount = row[2].isNull() ? 0 : row[2].get<std::int64_t>();
-            entry.exceptionCount = row[3].isNull() ? 0 : row[3].get<std::int64_t>();
-            entry.totalCount = row[4].isNull() ? 0 : row[4].get<std::int64_t>();
+            entry.successCount = asInt64(row[1], "successCount");
+            entry.failureCount = asInt64(row[2], "failureCount");
+            entry.exceptionCount = asInt64(row[3], "exceptionCount");
+            entry.totalCount = asInt64(row[4], "totalCount");
             entry.successEarnings = readDouble(row[5]);
             entry.failureEarnings = readDouble(row[6]);
             entry.exceptionEarnings = readDouble(row[7]);

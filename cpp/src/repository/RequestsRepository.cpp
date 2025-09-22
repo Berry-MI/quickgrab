@@ -232,7 +232,7 @@ std::vector<model::Request> RequestsRepository::findPending(int limit) {
 
         mysqlx::TableSelect select = table
             .select("id", "device_id", "buyer_id", "thread_id", "link", "cookies", "order_info", "user_info",
-                    "order_template", "message", "id_number", "keyword", "start_time", "end_time", "quantity",
+                    "order_template", "message", "id_number", "keyword", "DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time", "DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time", "quantity",
                     "delay", "frequency", "type", "status", "order_parameters", "actual_earnings",
                     "estimated_earnings", "extension")
             .where("status = :status")
@@ -316,7 +316,7 @@ std::vector<model::Request> RequestsRepository::findByFilters(const std::optiona
     try {
         std::ostringstream sql;
         sql << "SELECT id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, message, "
-               "id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, order_parameters, "
+               "id_number, keyword, DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time, DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time, quantity, delay, frequency, type, status, order_parameters, "
                "actual_earnings, estimated_earnings, extension FROM requests WHERE 1=1";
 
         std::vector<mysqlx::Value> params;
@@ -412,7 +412,6 @@ int RequestsRepository::insert(const model::Request& request) {
         util::log(util::LogLevel::error, std::string{"Insert request failed: "} + err.what());
         throw;
     }
-    return requests;
 }
 
 } // namespace quickgrab::repository

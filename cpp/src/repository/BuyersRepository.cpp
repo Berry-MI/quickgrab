@@ -137,8 +137,8 @@ constexpr const char* kSelectColumns[] = {
     "access_level",
     "daily_max_submissions",
     "daily_submission_count",
-    "validity_period"};
-    "DATE_FORMAT(validity_period, '%Y-%m-%d %H:%i:%s') AS validity_period"}; 
+    "DATE_FORMAT(validity_period, '%Y-%m-%d %H:%i:%s') AS validity_period"
+}; 
 
 } // namespace
 

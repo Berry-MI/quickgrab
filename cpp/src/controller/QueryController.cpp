@@ -1,11 +1,13 @@
 #include "quickgrab/controller/QueryController.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
+#include "quickgrab/util/Logging.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
 
 #include <chrono>
 #include <cstdlib>
+#include <exception>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -178,6 +180,20 @@ void sendNotFound(quickgrab::server::RequestContext& ctx) {
     ctx.response.prepare_payload();
 }
 
+void sendServerError(quickgrab::server::RequestContext& ctx, std::string_view message) {
+    ctx.response.result(boost::beast::http::status::internal_server_error);
+    ctx.response.set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
+    if (!message.empty()) {
+        boost::json::object obj;
+        obj["error"] = "internal_error";
+        obj["message"] = message;
+        ctx.response.body() = quickgrab::util::stringifyJson(obj);
+    } else {
+        ctx.response.body() = "{\"error\":\"internal_error\"}";
+    }
+    ctx.response.prepare_payload();
+}
+
 } // namespace
 
 QueryController::QueryController(service::QueryService& queryService)
@@ -244,13 +260,18 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
 }
 
 void QueryController::handlePending(quickgrab::server::RequestContext& ctx) {
-    auto pending = queryService_.listPending(20);
-    boost::json::array payload;
-    payload.reserve(pending.size());
-    for (const auto& request : pending) {
-        payload.emplace_back(requestToJson(request));
+    try {
+        auto pending = queryService_.listPending(20);
+        boost::json::array payload;
+        payload.reserve(pending.size());
+        for (const auto& request : pending) {
+            payload.emplace_back(requestToJson(request));
+        }
+        sendJsonResponse(ctx, payload);
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error, std::string{"加载待处理请求失败: "} + ex.what());
+        sendServerError(ctx, "数据库查询失败");
     }
-    sendJsonResponse(ctx, payload);
 }
 
 void QueryController::handleGetRequests(quickgrab::server::RequestContext& ctx) {
@@ -267,13 +288,18 @@ void QueryController::handleGetRequests(quickgrab::server::RequestContext& ctx) 
     int offset = parseIntOrDefault(params, "offset", 0);
     int limit = parseIntOrDefault(params, "limit", 20);
 
-    auto requests = queryService_.getRequestsByFilters(keyword, buyerId, type, status, order, offset, limit);
-    boost::json::array payload;
-    payload.reserve(requests.size());
-    for (const auto& request : requests) {
-        payload.emplace_back(requestToJson(request));
+    try {
+        auto requests = queryService_.getRequestsByFilters(keyword, buyerId, type, status, order, offset, limit);
+        boost::json::array payload;
+        payload.reserve(requests.size());
+        for (const auto& request : requests) {
+            payload.emplace_back(requestToJson(request));
+        }
+        sendJsonResponse(ctx, payload);
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error, std::string{"加载抢购请求失败: "} + ex.what());
+        sendServerError(ctx, "数据库查询失败");
     }
-    sendJsonResponse(ctx, payload);
 }
 
 void QueryController::handleGetResults(quickgrab::server::RequestContext& ctx) {
@@ -290,54 +316,76 @@ void QueryController::handleGetResults(quickgrab::server::RequestContext& ctx) {
     int offset = parseIntOrDefault(params, "offset", 0);
     int limit = parseIntOrDefault(params, "limit", 20);
 
-    auto results = queryService_.getResultsByFilters(keyword, buyerId, type, status, order, offset, limit);
-    boost::json::array payload;
-    payload.reserve(results.size());
-    for (const auto& result : results) {
-        payload.emplace_back(resultToJson(result));
+    try {
+        auto results = queryService_.getResultsByFilters(keyword, buyerId, type, status, order, offset, limit);
+        boost::json::array payload;
+        payload.reserve(results.size());
+        for (const auto& result : results) {
+            payload.emplace_back(resultToJson(result));
+        }
+        sendJsonResponse(ctx, payload);
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error, std::string{"加载抢购结果失败: "} + ex.what());
+        sendServerError(ctx, "数据库查询失败");
     }
-    sendJsonResponse(ctx, payload);
 }
 
 void QueryController::handleDeleteRequest(quickgrab::server::RequestContext& ctx, int requestId) {
-    if (queryService_.deleteRequestById(requestId)) {
-        sendJsonResponse(ctx, boost::json::object{});
-    } else {
-        ctx.response.result(boost::beast::http::status::internal_server_error);
-        ctx.response.set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
-        ctx.response.body() = "{\"error\":\"delete_failed\"}";
-        ctx.response.prepare_payload();
+    try {
+        if (queryService_.deleteRequestById(requestId)) {
+            sendJsonResponse(ctx, boost::json::object{});
+        } else {
+            sendServerError(ctx, "删除失败");
+        }
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error,
+                  "删除抢购请求出现异常 id=" + std::to_string(requestId) + " error=" + ex.what());
+        sendServerError(ctx, "删除失败");
     }
 }
 
 void QueryController::handleDeleteResult(quickgrab::server::RequestContext& ctx, int resultId) {
-    if (queryService_.deleteResultById(resultId)) {
-        sendJsonResponse(ctx, boost::json::object{});
-    } else {
-        ctx.response.result(boost::beast::http::status::internal_server_error);
-        ctx.response.set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
-        ctx.response.body() = "{\"error\":\"delete_failed\"}";
-        ctx.response.prepare_payload();
+    try {
+        if (queryService_.deleteResultById(resultId)) {
+            sendJsonResponse(ctx, boost::json::object{});
+        } else {
+            sendServerError(ctx, "删除失败");
+        }
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error,
+                  "删除抢购结果出现异常 id=" + std::to_string(resultId) + " error=" + ex.what());
+        sendServerError(ctx, "删除失败");
     }
 }
 
 void QueryController::handleGetResult(quickgrab::server::RequestContext& ctx, int resultId) {
-    auto result = queryService_.getResultById(resultId);
-    if (!result) {
-        sendNotFound(ctx);
-        return;
+    try {
+        auto result = queryService_.getResultById(resultId);
+        if (!result) {
+            sendNotFound(ctx);
+            return;
+        }
+        sendJsonResponse(ctx, resultToJson(*result));
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error,
+                  "查询抢购结果详情失败 id=" + std::to_string(resultId) + " error=" + ex.what());
+        sendServerError(ctx, "数据库查询失败");
     }
-    sendJsonResponse(ctx, resultToJson(*result));
 }
 
 void QueryController::handleGetBuyers(quickgrab::server::RequestContext& ctx) {
-    auto buyers = queryService_.getAllBuyers();
-    boost::json::array payload;
-    payload.reserve(buyers.size());
-    for (const auto& buyer : buyers) {
-        payload.emplace_back(buyerToJson(buyer));
+    try {
+        auto buyers = queryService_.getAllBuyers();
+        boost::json::array payload;
+        payload.reserve(buyers.size());
+        for (const auto& buyer : buyers) {
+            payload.emplace_back(buyerToJson(buyer));
+        }
+        sendJsonResponse(ctx, payload);
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error, std::string{"加载买家列表失败: "} + ex.what());
+        sendServerError(ctx, "数据库查询失败");
     }
-    sendJsonResponse(ctx, payload);
 }
 
 } // namespace quickgrab::controller

@@ -3,91 +3,84 @@
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 #include <unordered_map>
 
 namespace quickgrab::controller {
 namespace {
+
+std::unordered_map<std::string, std::string> parseCookies(const std::string& header) {
+    std::unordered_map<std::string, std::string> cookies;
+    std::size_t start = 0;
+    while (start < header.size()) {
+        auto end = header.find(';', start);
+        if (end == std::string::npos) {
+            end = header.size();
+        }
+        auto pair = header.substr(start, end - start);
+        auto eq = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string key = pair.substr(0, eq);
+            std::string value = pair.substr(eq + 1);
+            auto trim = [](std::string str) {
+                auto begin = std::find_if_not(str.begin(), str.end(), [](unsigned char ch) { return std::isspace(ch); });
+                auto endIt = std::find_if_not(str.rbegin(), str.rend(), [](unsigned char ch) { return std::isspace(ch); }).base();
+                if (begin >= endIt) {
+                    return std::string{};
+                }
+                return std::string(begin, endIt);
+            };
+            cookies.emplace(trim(std::move(key)), trim(std::move(value)));
+        }
+        start = end + 1;
+    }
+    return cookies;
+}
+
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,
                       boost::beast::http::status status,
-                      const boost::json::value& body) {
+                      const boost::json::value& payload) {
     ctx.response.result(status);
     ctx.response.set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
-    ctx.response.body() = boost::json::serialize(body);
+    ctx.response.body() = boost::json::serialize(payload);
     ctx.response.prepare_payload();
 }
 
-std::unordered_map<std::string, std::string> parseQueryParameters(const boost::beast::string_view& target) {
-    std::unordered_map<std::string, std::string> params;
-    auto pos = target.find('?');
-    if (pos == boost::beast::string_view::npos) {
-        return params;
-    }
-    auto query = target.substr(pos + 1);
-    std::size_t start = 0;
-    while (start < query.size()) {
-        auto end = query.find('&', start);
-        if (end == boost::beast::string_view::npos) {
-            end = query.size();
-        }
-        auto token = query.substr(start, end - start);
-        auto eq = token.find('=');
-        std::string key;
-        std::string value;
-        if (eq == boost::beast::string_view::npos) {
-            key.assign(token.data(), token.size());
-        } else {
-            key.assign(token.substr(0, eq).data(), eq);
-            value.assign(token.substr(eq + 1).data(), token.size() - eq - 1);
-        }
-        auto decode = [](std::string input) {
-            std::string decoded;
-            decoded.reserve(input.size());
-            for (std::size_t i = 0; i < input.size(); ++i) {
-                char ch = input[i];
-                if (ch == '+') {
-                    decoded.push_back(' ');
-                } else if (ch == '%' && i + 2 < input.size()) {
-                    auto hex = input.substr(i + 1, 2);
-                    decoded.push_back(static_cast<char>(std::strtol(hex.c_str(), nullptr, 16)));
-                    i += 2;
-                } else {
-                    decoded.push_back(ch);
-                }
-            }
-            return decoded;
-        };
-        params.emplace(decode(std::move(key)), decode(std::move(value)));
-        start = end + 1;
-    }
-    return params;
+void sendUnauthorized(quickgrab::server::RequestContext& ctx) {
+    boost::json::object payload{{"status", "error"}, {"message", "未登录"}};
+    sendJsonResponse(ctx, boost::beast::http::status::unauthorized, payload);
 }
 
 } // namespace
+
+UserController::UserController(service::AuthService& authService)
+    : authService_(authService) {}
 
 void UserController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("GET", "/api/user", [this](auto& ctx) { handleGetUser(ctx); });
 }
 
 void UserController::handleGetUser(quickgrab::server::RequestContext& ctx) {
-    auto params = parseQueryParameters(ctx.request.target());
-
-    std::string username;
-    if (auto it = params.find("username"); it != params.end() && !it->second.empty()) {
-        username = it->second;
-    } else if (auto header = ctx.request.find("X-User"); header != ctx.request.end()) {
-        username = std::string(header->value());
-    } else if (auto auth = ctx.request.find(boost::beast::http::field::authorization);
-               auth != ctx.request.end() && !auth->value().empty()) {
-        username = std::string(auth->value());
+    std::string token;
+    if (auto header = ctx.request.find(boost::beast::http::field::cookie); header != ctx.request.end()) {
+        auto cookies = parseCookies(std::string(header->value()));
+        if (auto it = cookies.find(std::string(service::AuthService::kSessionCookie)); it != cookies.end()) {
+            token = it->second;
+        }
     }
 
-    if (username.empty()) {
-        username = "guest";
+    auto buyer = authService_.getBuyerByToken(token);
+    if (!buyer) {
+        sendUnauthorized(ctx);
+        return;
     }
 
-    boost::json::object userInfo{{"username", username}, {"accessLevel", 1}, {"email", username + "@example.com"}};
-    sendJsonResponse(ctx, boost::beast::http::status::ok, std::move(userInfo));
+    boost::json::object payload{{"username", buyer->username},
+                                {"accessLevel", buyer->accessLevel},
+                                {"email", buyer->email}};
+    sendJsonResponse(ctx, boost::beast::http::status::ok, payload);
 }
 
 } // namespace quickgrab::controller

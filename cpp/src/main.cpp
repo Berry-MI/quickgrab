@@ -457,23 +457,6 @@ int main(int /*argc*/, char** /*argv*/) {
             kdlConfig->refreshInterval);
     }
 
-    if (auto kdlConfig = loadKdlProxyConfig("data/kdlproxy.json")) {
-        util::log(util::LogLevel::info,
-                  "启用 KDL 代理池刷新，每 " +
-                      std::to_string(kdlConfig->refreshInterval.count()) +
-                      " 分钟拉取 " + std::to_string(kdlConfig->batchSize) + " 个代理");
-        proxyService.scheduleRefresh(
-            [&httpClient, config = *kdlConfig, &proxyService]() {
-                try {
-                    return fetchKdlProxies(config, httpClient);
-                } catch (const std::exception& ex) {
-                    util::log(util::LogLevel::warn, std::string{"刷新 KDL 代理失败: "} + ex.what());
-                    return proxyService.listProxies();
-                }
-            },
-            kdlConfig->refreshInterval);
-    }
-
     auto router = std::make_shared<server::Router>();
     controller::AuthController authController{authService};
     authController.registerRoutes(*router);

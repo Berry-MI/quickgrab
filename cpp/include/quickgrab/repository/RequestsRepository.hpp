@@ -3,11 +3,12 @@
 #include \"quickgrab/model/Request.hpp\"
 #include \"quickgrab/repository/MySqlConnectionPool.hpp\"
 
-#include <vector>
+#include <mysqlx/xdevapi.h>
 
-namespace sql {
-class ResultSet;
-}
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace quickgrab::repository {
 
@@ -16,10 +17,20 @@ public:
     explicit RequestsRepository(MySqlConnectionPool& pool);
 
     std::vector<model::Request> findPending(int limit);
+    std::vector<model::Request> findByFilters(const std::optional<std::string>& keyword,
+                                              const std::optional<int>& buyerId,
+                                              const std::optional<int>& type,
+                                              const std::optional<int>& status,
+                                              std::string_view orderColumn,
+                                              std::string_view orderDirection,
+                                              int offset,
+                                              int limit);
     void updateStatus(int requestId, int status);
+    void updateThreadId(int requestId, const std::string& threadId);
+    void deleteById(int requestId);
 
 private:
-    model::Request mapRow(sql::ResultSet& rs);
+    model::Request mapRow(mysqlx::Row row);
 
     MySqlConnectionPool& pool_;
 };

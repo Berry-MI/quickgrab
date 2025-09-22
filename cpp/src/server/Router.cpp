@@ -50,13 +50,22 @@ Router::Handler Router::resolve(const std::string& method,
                                 const std::string& path,
                                 std::unordered_map<std::string, std::string>& params) const {
     auto normalized = normalizeMethod(method);
+    const std::string* pathToMatch = &path;
+    std::string strippedPath;
+    if (auto queryPos = path.find('?'); queryPos != std::string::npos) {
+        strippedPath = path.substr(0, queryPos);
+        if (strippedPath.empty()) {
+            strippedPath = "/";
+        }
+        pathToMatch = &strippedPath;
+    }
     for (const auto& entry : routes_) {
         if (!entry.method.empty() && !normalized.empty() && entry.method != normalized) {
             continue;
         }
 
         std::smatch match;
-        if (std::regex_match(path, match, entry.pattern)) {
+        if (std::regex_match(*pathToMatch, match, entry.pattern)) {
             params.clear();
             for (std::size_t i = 0; i < entry.tokens.size(); ++i) {
                 if (i + 1 < match.size()) {

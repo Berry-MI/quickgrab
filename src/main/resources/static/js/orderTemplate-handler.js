@@ -13,7 +13,7 @@ function getOrderTemplate() {
         return;
     }
 
-    fetch('/getNote', {
+    fetch('/api/getNote', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

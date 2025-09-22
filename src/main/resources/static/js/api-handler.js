@@ -151,7 +151,7 @@ function checkLatency() {
     if (data == null) {
         return;
     }
-    fetch('/checkLatency', {
+    fetch('/api/checkLatency', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -185,7 +185,7 @@ export async function setItemInfo() {
     try {
         setButtonLoading(setTimeButton, true, '');
 
-        const response = await fetch('/fetchItemInfo', {
+        const response = await fetch('/api/fetchItemInfo', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',

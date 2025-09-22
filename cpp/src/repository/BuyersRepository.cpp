@@ -134,7 +134,6 @@ std::optional<model::Buyer> BuyersRepository::findByUsername(const std::string& 
                                              kSelectColumns[7])
                                      .where("username = :username")
                                      .bind("username", username)
-                                     .limit(1)
                                      .execute();
 
         for (mysqlx::Row row : rows) {

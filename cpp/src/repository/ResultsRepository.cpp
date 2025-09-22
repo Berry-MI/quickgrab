@@ -1,4 +1,5 @@
 #include "quickgrab/repository/ResultsRepository.hpp"
+#include "quickgrab/repository/SqlUtils.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
@@ -230,11 +231,8 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         if (status) {
             sql << " AND status = :status";
         }
-        const int safeLimit = std::max(0, limit);
-        const int safeOffset = std::max(0, offset);
-
         sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
-        sql << " LIMIT " << safeLimit << " OFFSET " << safeOffset;
+        sql << buildLimitOffsetClause(limit, offset);
 
         auto stmt = session->sql(sql.str());
         if (keyword && !keyword->empty()) {

@@ -230,8 +230,11 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         if (status) {
             sql << " AND status = :status";
         }
+        const int safeLimit = std::max(0, limit);
+        const int safeOffset = std::max(0, offset);
+
         sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
-        sql << " LIMIT :limit OFFSET :offset";
+        sql << " LIMIT " << safeLimit << " OFFSET " << safeOffset;
 
         auto stmt = session->sql(sql.str());
         if (keyword && !keyword->empty()) {
@@ -246,8 +249,6 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
         if (status) {
             stmt.bind("status", *status);
         }
-        stmt.bind("limit", std::max(0, limit));
-        stmt.bind("offset", std::max(0, offset));
 
         auto rows = stmt.execute();
         for (mysqlx::Row row : rows) {

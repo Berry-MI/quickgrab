@@ -8,6 +8,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <iostream>
 
 namespace quickgrab::controller {
 namespace {
@@ -59,6 +60,8 @@ boost::json::object wrapResponse(boost::json::object status, boost::json::object
 }
 
 boost::json::object buildRequestEcho(boost::json::object payload) {
+    std::cout<<boost::json::serialize(payload)<<std::endl;
+
     auto normalize = [&](const char* key) {
         if (auto it = payload.if_contains(key); it) {
             auto parsed = ensureJsonObject(*it);
@@ -90,7 +93,7 @@ boost::json::object buildRequestEcho(boost::json::object payload) {
         static std::atomic<int> counter{1};
         payload["id"] = counter.fetch_add(1);
     }
-
+    std::cout << boost::json::serialize(payload) << std::endl;
     return payload;
 }
 
@@ -126,6 +129,8 @@ void SubmitController::registerRoutes(quickgrab::server::Router& router) {
 void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ctx) {
     try {
         auto json = boost::json::parse(ctx.request.body());
+		
+        std::cout << boost::json::serialize(json)<<std::endl;;
         if (!json.is_object()) {
             throw std::invalid_argument("请求体必须是JSON对象");
         }

@@ -1,11 +1,8 @@
 #include "quickgrab/repository/MySqlConnectionPool.hpp"
 #include "quickgrab/util/Logging.hpp"
 
-#include <cppconn/driver.h>
-#include <cppconn/exception.h>
-#include <cppconn/prepared_statement.h>
+#include <mysqlx/xdevapi.h>
 
-#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -13,21 +10,13 @@
 namespace quickgrab::repository {
 
 namespace {
-sql::ConnectOptionsMap buildOptions(const DatabaseConfig& config) {
-    sql::ConnectOptionsMap options;
-    options["hostName"] = config.host;
-    options["port"] = config.port;
-    options["userName"] = config.user;
-    options["password"] = config.password;
-    options["OPT_RECONNECT"] = true;
-    options["CLIENT_MULTI_STATEMENTS"] = true;
-    return options;
+std::string normalizeHost(const std::string& host) {
+    return host.empty() ? std::string{"127.0.0.1"} : host;
 }
-}
+} // namespace
 
 MySqlConnectionPool::MySqlConnectionPool(DatabaseConfig config)
-    : config_(std::move(config))
-    , driver_(sql::mysql::get_mysql_driver_instance()) {
+    : config_(std::move(config)) {
     if (config_.host.empty()) {
         config_.host = "127.0.0.1";
     }
@@ -39,51 +28,51 @@ MySqlConnectionPool::MySqlConnectionPool(DatabaseConfig config)
     }
 }
 
-std::unique_ptr<sql::Connection> MySqlConnectionPool::createConnection() {
-    sql::ConnectOptionsMap options = buildOptions(config_);
-    std::unique_ptr<sql::Connection> connection(driver_->connect(options));
-    connection->setSchema(config_.database);
-    if (!config_.charset.empty()) {
-        connection->setClientOption("characterSetResults", config_.charset.c_str());
-        connection->setClientOption("characterSet", config_.charset.c_str());
+std::unique_ptr<mysqlx::Session> MySqlConnectionPool::createSession() {
+    try {
+        auto session = std::make_unique<mysqlx::Session>(
+            mysqlx::SessionOption::HOST, normalizeHost(config_.host),
+            mysqlx::SessionOption::PORT, static_cast<unsigned int>(config_.port),
+            mysqlx::SessionOption::USER, config_.user,
+            mysqlx::SessionOption::PWD, config_.password);
+        if (!config_.charset.empty()) {
+            session->sql("SET NAMES '" + config_.charset + "'").execute();
+        }
+        if (!config_.database.empty()) {
+            session->sql("USE `" + config_.database + "`").execute();
+        }
+        return session;
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"Create MySQL session failed: "} + err.what());
+        throw;
     }
-    return connection;
 }
 
-void MySqlConnectionPool::ConnectionDeleter::operator()(sql::Connection* conn) const noexcept {
-    if (pool && conn) {
-        pool->release(conn);
+void MySqlConnectionPool::SessionDeleter::operator()(mysqlx::Session* session) const noexcept {
+    if (pool && session) {
+        pool->release(session);
     }
 }
 
-std::shared_ptr<sql::Connection> MySqlConnectionPool::acquire() {
+std::shared_ptr<mysqlx::Session> MySqlConnectionPool::acquire() {
     std::unique_lock<std::mutex> lock(mutex_);
     auto predicate = [this]() { return !idle_.empty() || currentSize_ < config_.poolSize; };
     cv_.wait(lock, predicate);
 
     if (!idle_.empty()) {
-        std::unique_ptr<sql::Connection> conn = std::move(idle_.back());
+        std::unique_ptr<mysqlx::Session> session = std::move(idle_.back());
         idle_.pop_back();
-        return std::shared_ptr<sql::Connection>(conn.release(), ConnectionDeleter{this});
+        return std::shared_ptr<mysqlx::Session>(session.release(), SessionDeleter{this});
     }
 
-    std::unique_ptr<sql::Connection> conn = createConnection();
+    std::unique_ptr<mysqlx::Session> session = createSession();
     ++currentSize_;
-    return std::shared_ptr<sql::Connection>(conn.release(), ConnectionDeleter{this});
+    return std::shared_ptr<mysqlx::Session>(session.release(), SessionDeleter{this});
 }
 
-void MySqlConnectionPool::release(sql::Connection* conn) {
-    std::unique_ptr<sql::Connection> holder(conn);
-    bool healthy = true;
-    try {
-        if (!holder->isValid()) {
-            holder->reconnect();
-            holder->setSchema(config_.database);
-        }
-    } catch (const sql::SQLException& ex) {
-        util::log(util::LogLevel::warn, std::string{"MySQL reconnect failed: "} + ex.what());
-        healthy = false;
-    }
+void MySqlConnectionPool::release(mysqlx::Session* session) {
+    std::unique_ptr<mysqlx::Session> holder(session);
+    bool healthy = static_cast<bool>(holder);
 
     std::unique_lock<std::mutex> lock(mutex_);
     if (healthy) {

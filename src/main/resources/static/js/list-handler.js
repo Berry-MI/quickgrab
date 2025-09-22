@@ -60,7 +60,7 @@ class ListHandler {
             }
 
             const currentUser = userData.username;
-            const buyersResponse = await fetch('/api/buyers');
+            const buyersResponse = await fetch('/api/getBuyer');
             const buyersData = await buyersResponse.json();
 
             // 填充买家选择器

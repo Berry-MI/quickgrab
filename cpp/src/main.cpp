@@ -368,7 +368,6 @@ std::vector<ProxyEndpoint> fetchKdlProxies(const KdlProxyConfig& config,
     return proxies;
 }
 
-
 void startRequestPump(boost::asio::io_context& io, quickgrab::service::GrabService& grabService) {
     auto timer = std::make_shared<boost::asio::steady_timer>(io);
     auto handler = std::make_shared<std::function<void(const boost::system::error_code&)>>();
@@ -491,7 +490,7 @@ int main(int /*argc*/, char** /*argv*/) {
     controller::StatisticsController statisticsController{statisticsService};
     statisticsController.registerRoutes(*router);
 
-    controller::SubmitController submitController;
+    controller::SubmitController submitController{grabService};
     submitController.registerRoutes(*router);
 
     controller::ToolController toolController;

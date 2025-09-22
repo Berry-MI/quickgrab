@@ -44,6 +44,16 @@ void GrabService::processPending() {
     });
 }
 
+std::optional<int> GrabService::handleRequest(const model::Request& request) {
+    try {
+        return requests_.insert(request);
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error,
+                  std::string{"插入抢购请求失败: "} + ex.what());
+        return std::nullopt;
+    }
+}
+
 void GrabService::executeRequest(model::Request request) {
     executeGrab(std::move(request));
 }

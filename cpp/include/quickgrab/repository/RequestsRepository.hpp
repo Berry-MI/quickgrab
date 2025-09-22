@@ -25,6 +25,7 @@ public:
                                               std::string_view orderDirection,
                                               int offset,
                                               int limit);
+    int insert(const model::Request& request);
     void updateStatus(int requestId, int status);
     void updateThreadId(int requestId, const std::string& threadId);
     void deleteById(int requestId);

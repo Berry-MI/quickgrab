@@ -118,48 +118,6 @@ double readDouble(const mysqlx::Value& value) {
     }
 }
 
-std::int64_t asInt64FromNumeric(const mysqlx::Value& v,
-    const std::string& colname,
-    const std::string& where_hint = {}) {
-    if (v.isNull()) return 0;
-
-    // 先直接尝试 int64
-    try {
-        return v.get<std::int64_t>();
-    }
-    catch (const std::exception& ex) {
-        util::log(util::LogLevel::debug,
-            "asInt64FromNumeric int64 failed on [" + colname + "]"
-            + (where_hint.empty() ? "" : " @" + where_hint)
-            + ": " + ex.what());
-    }
-
-    // 退回到 double
-    double d = readDouble(v);
-
-    // 边界保护
-    if (d > static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-        util::log(util::LogLevel::warn,
-            "asInt64FromNumeric overflow on [" + colname + "] d=" + std::to_string(d));
-        return std::numeric_limits<std::int64_t>::max();
-    }
-    if (d < static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
-        util::log(util::LogLevel::warn,
-            "asInt64FromNumeric underflow on [" + colname + "] d=" + std::to_string(d));
-        return std::numeric_limits<std::int64_t>::min();
-    }
-
-    // 检查是否非整数
-    double rounded = std::round(d);
-    if (std::fabs(d - rounded) > 1e-9) {
-        util::log(util::LogLevel::warn,
-            "asInt64FromNumeric non-integer on [" + colname + "] d=" + std::to_string(d));
-    }
-
-    return static_cast<std::int64_t>(std::llround(d));
-}
-
-
 boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string& column) {
     if (value.isNull()) {
         return boost::json::value();
@@ -228,38 +186,37 @@ using ColumnIndex = std::unordered_map<std::string, std::size_t>;
 ColumnIndex buildColumnIndex(const mysqlx::RowResult& rows) {
     ColumnIndex index;
     try {
-        const mysqlx::col_count_t n = rows.getColumnCount(); // 列数
-        for (mysqlx::col_count_t pos = 0; pos < n; ++pos) {
-            const auto& column = rows.getColumn(pos);         // 取列元数据
-
+        auto columns = rows.getColumns();
+        for (std::size_t position = 0; position < columns.count(); ++position) {
+            auto column = columns[position];
             try {
                 std::string name;
-                try { name = column.getColumnLabel(); }       // 优先用别名
-                catch (...) { name.clear(); }
-
+                try {
+                    name = column.getColumnLabel();
+                } catch (const std::exception&) {
+                    name.clear();
+                }
                 if (name.empty()) {
-                    try { name = column.getColumnName(); }    // 没有别名就用列名
-                    catch (...) { name.clear(); }
+                    try {
+                        name = column.getColumnName();
+                    } catch (const std::exception&) {
+                        name.clear();
+                    }
                 }
-
                 if (!name.empty()) {
-                    index.emplace(std::move(name),
-                        static_cast<std::size_t>(pos));
+                    index.emplace(std::move(name), position);
                 }
-            }
-            catch (const std::exception& ex) {
+            } catch (const std::exception& ex) {
                 util::log(util::LogLevel::warn,
-                    std::string{ "Failed to read column metadata: " } + ex.what());
+                          std::string{"Failed to read column metadata: "} + ex.what());
             }
         }
-    }
-    catch (const std::exception& ex) {
+    } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn,
-            std::string{ "Failed to inspect column metadata: " } + ex.what());
+                  std::string{"Failed to inspect column metadata: "} + ex.what());
     }
     return index;
 }
-
 
 const mysqlx::Value* findValue(const mysqlx::Row& row, const ColumnIndex& index, std::string_view column) {
     auto it = index.find(std::string(column));
@@ -451,8 +408,8 @@ std::optional<model::Result> ResultsRepository::findById(int resultId) {
     try {
         std::ostringstream sql;
         sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
-               "message, id_number, keyword, DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time, DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time, quantity, delay, frequency, type, status, response_message, "
-               "actual_earnings, estimated_earnings, extension, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at FROM results WHERE id = :id";
+               "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
+               "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE id = :id";
         auto rows = session->sql(sql.str()).bind("id", resultId).execute();
         auto index = buildColumnIndex(rows);
         for (mysqlx::Row row : rows) {
@@ -492,9 +449,9 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
     auto session = pool_.acquire();
     try {
         std::ostringstream sql;
-        sql << "SELECT id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
-               "message, id_number, keyword, DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time, DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time, quantity, delay, frequency, type, status, response_message, "
-               "actual_earnings, estimated_earnings, extension FROM results WHERE 1=1";
+        sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
+               "message, id_number, keyword, start_time, end_time, quantity, delay, frequency, type, status, response_message, "
+               "actual_earnings, estimated_earnings, extension, created_at FROM results WHERE 1=1";
 
         std::vector<mysqlx::Value> params;
         if (keyword && !keyword->empty()) {
@@ -533,203 +490,152 @@ std::vector<model::Result> ResultsRepository::findByFilters(const std::optional<
     return results;
 }
 
-
-
-
-std::vector<ResultsRepository::AggregatedStats>
-ResultsRepository::getStatistics(const std::optional<int>& buyerId,
-    const std::optional<std::string>& startTime,
-    const std::optional<std::string>& endTime) {
+std::vector<ResultsRepository::AggregatedStats> ResultsRepository::getStatistics(const std::optional<int>& buyerId,
+                                                                                const std::optional<std::string>& startTime,
+                                                                                const std::optional<std::string>& endTime) {
     std::vector<AggregatedStats> stats;
     auto session = pool_.acquire();
-
     try {
         std::ostringstream sql;
-        sql << "SELECT type, "
-            "SUM(successCount), "
-            "SUM(failureCount), "
-            "SUM(exceptionCount), "
-            "SUM(totalCount), "
-            "SUM(successEarnings), "
-            "SUM(failureEarnings), "
-            "SUM(exceptionEarnings), "
-            "SUM(totalEarnings) "
-            "FROM ( "
-            "  SELECT CASE WHEN type IS NULL THEN 'total' ELSE CAST(type AS CHAR) END AS type, "
-            "         CAST(SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS SIGNED INTEGER)   AS successCount, "
-            "         CAST(SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS SIGNED INTEGER)   AS failureCount, "
-            "         CAST(SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) AS SIGNED INTEGER)   AS exceptionCount, "
-            "         CAST(COUNT(*) AS SIGNED INTEGER)                                      AS totalCount, "
-            "         CAST(SUM(CASE WHEN status = 1 THEN actual_earnings ELSE 0 END) AS DOUBLE) AS successEarnings, "
-            "         CAST(SUM(CASE WHEN status = 2 THEN actual_earnings ELSE 0 END) AS DOUBLE) AS failureEarnings, "
-            "         CAST(SUM(CASE WHEN status = 3 THEN actual_earnings ELSE 0 END) AS DOUBLE) AS exceptionEarnings, "
-            "         CAST(SUM(actual_earnings) AS DOUBLE)                               AS totalEarnings "
-            "  FROM results WHERE 1=1 ";
-
-        std::vector<mysqlx::Value> binds;
-        if (buyerId) { sql << " AND buyer_id = ?";       binds.emplace_back(*buyerId); }
-        if (startTime) { sql << " AND start_time >= ?";    binds.emplace_back(*startTime); }
-        if (endTime) { sql << " AND start_time <= ?";    binds.emplace_back(*endTime); }
-
-        sql << "  GROUP BY type WITH ROLLUP "
-            "  UNION ALL SELECT '1',0,0,0,0,0,0,0,0 "
-            "  UNION ALL SELECT '2',0,0,0,0,0,0,0,0 "
-            "  UNION ALL SELECT '3',0,0,0,0,0,0,0,0 "
-            "  UNION ALL SELECT 'total',0,0,0,0,0,0,0,0 "
-            ") AS stats "
-            "GROUP BY type "
-            "ORDER BY FIELD(type,'1','2','3','total')";
+        sql << "SELECT type, IFNULL(SUM(successCount), 0) AS successCount, IFNULL(SUM(failureCount), 0) AS failureCount, "
+               "IFNULL(SUM(exceptionCount), 0) AS exceptionCount, IFNULL(SUM(totalCount), 0) AS totalCount, "
+               "IFNULL(SUM(successEarnings), 0) AS successEarnings, IFNULL(SUM(failureEarnings), 0) AS failureEarnings, "
+               "IFNULL(SUM(exceptionEarnings), 0) AS exceptionEarnings, IFNULL(SUM(totalEarnings), 0) AS totalEarnings "
+               "FROM ( SELECT CASE WHEN type IS NULL THEN 'total' ELSE CAST(type AS CHAR) END AS type, "
+               "SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS successCount, "
+               "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS failureCount, "
+               "SUM(CASE WHEN status = 3 THEN 1 ELSE 0 END) AS exceptionCount, COUNT(*) AS totalCount, "
+               "SUM(CASE WHEN status = 1 THEN actual_earnings ELSE 0 END) AS successEarnings, "
+               "SUM(CASE WHEN status = 2 THEN actual_earnings ELSE 0 END) AS failureEarnings, "
+               "SUM(CASE WHEN status = 3 THEN actual_earnings ELSE 0 END) AS exceptionEarnings, SUM(actual_earnings) AS totalEarnings "
+               "FROM results";
+        if (buyerId || startTime || endTime) {
+            sql << " WHERE 1=1";
+        }
+        if (buyerId) {
+            sql << " AND buyer_id = :buyerId";
+        }
+        if (startTime) {
+            sql << " AND start_time >= :startTime";
+        }
+        if (endTime) {
+            sql << " AND start_time <= :endTime";
+        }
+        sql << " GROUP BY type WITH ROLLUP UNION ALL SELECT '1' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '2' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT '3' AS type, 0, 0, 0, 0, 0, 0, 0, 0 UNION ALL SELECT 'total' AS type, 0, 0, 0, 0, 0, 0, 0, 0 ) AS stats GROUP BY type";
 
         auto stmt = session->sql(sql.str());
-        for (auto& v : binds) stmt.bind(v);
-
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (startTime) {
+            stmt.bind("startTime", *startTime);
+        }
+        if (endTime) {
+            stmt.bind("endTime", *endTime);
+        }
         auto rows = stmt.execute();
-
-        //（可选）取列名用于日志
-        std::vector<std::string> colnames;
-        {
-            auto cc = rows.getColumnCount();
-            colnames.reserve(cc);
-            for (mysqlx::col_count_t i = 0; i < cc; ++i) {
-                std::string name;
-                try { name = rows.getColumn(i).getColumnLabel(); }
-                catch (...) {}
-                if (name.empty()) { try { name = rows.getColumn(i).getColumnName(); } catch (...) {} }
-                if (name.empty()) name = "#" + std::to_string(i);
-                colnames.push_back(std::move(name));
-            }
-        }
-
         for (mysqlx::Row row : rows) {
-            AggregatedStats a{};
-            a.type = row[0].get<std::string>();
-            // 计数字段用“方案B”读法（先试int64，失败退到double再转）
-            a.successCount = asInt64FromNumeric(row[1], colnames.size() > 1 ? colnames[1] : "successCount", "getStatistics");
-            a.failureCount = asInt64FromNumeric(row[2], colnames.size() > 2 ? colnames[2] : "failureCount", "getStatistics");
-            a.exceptionCount = asInt64FromNumeric(row[3], colnames.size() > 3 ? colnames[3] : "exceptionCount", "getStatistics");
-            a.totalCount = asInt64FromNumeric(row[4], colnames.size() > 4 ? colnames[4] : "totalCount", "getStatistics");
-            // 金额字段按 double 读取（SQL里已 CAST DOUBLE）
-            a.successEarnings = row[5].isNull() ? 0.0 : row[5].get<double>();
-            a.failureEarnings = row[6].isNull() ? 0.0 : row[6].get<double>();
-            a.exceptionEarnings = row[7].isNull() ? 0.0 : row[7].get<double>();
-            a.totalEarnings = row[8].isNull() ? 0.0 : row[8].get<double>();
-            stats.emplace_back(std::move(a));
+            AggregatedStats entry{};
+            entry.type = readString(row[0]);
+            entry.successCount = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
+            entry.failureCount = row[2].isNull() ? 0 : row[2].get<std::int64_t>();
+            entry.exceptionCount = row[3].isNull() ? 0 : row[3].get<std::int64_t>();
+            entry.totalCount = row[4].isNull() ? 0 : row[4].get<std::int64_t>();
+            entry.successEarnings = readDouble(row[5]);
+            entry.failureEarnings = readDouble(row[6]);
+            entry.exceptionEarnings = readDouble(row[7]);
+            entry.totalEarnings = readDouble(row[8]);
+            stats.emplace_back(std::move(entry));
         }
-    }
-    catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error, "查询统计数据失败: " + std::string(err.what()));
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询统计数据失败: "} + err.what());
         throw;
     }
     return stats;
 }
 
-
-
-
-
-
-
-std::vector<ResultsRepository::DailyStat>
-ResultsRepository::getDailyStats(const std::optional<int>& buyerId,
-    const std::optional<int>& status) {
+std::vector<ResultsRepository::DailyStat> ResultsRepository::getDailyStats(const std::optional<int>& buyerId,
+                                                                           const std::optional<int>& status) {
     std::vector<DailyStat> items;
     auto session = pool_.acquire();
-
     try {
         std::ostringstream sql;
-        sql << "SELECT DATE_FORMAT(dates.date, '%Y-%m-%d') AS date, "
-            "IFNULL(COUNT(r.id), 0) AS total, "
-            "IFNULL(SUM(r.actual_earnings), 0) AS earnings "
-            "FROM (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date FROM seq_0_to_14) dates "
-            "LEFT JOIN results r ON DATE(r.start_time) = dates.date "
-            "WHERE 1=1";
-
-        // 用位置参数收集绑定值（顺序与 ? 对应）
-        std::vector<mysqlx::Value> binds;
-        if (buyerId.has_value()) {
-            sql << " AND r.buyer_id = ?";
-            binds.emplace_back(*buyerId);
+        sql << "SELECT dates.date AS date, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+               "FROM (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date FROM seq_0_to_14) dates "
+               "LEFT JOIN results r ON DATE(r.start_time) = dates.date";
+        if (buyerId || status) {
+            sql << " AND 1=1";
         }
-        if (status.has_value()) {
-            sql << " AND r.status = ?";
-            binds.emplace_back(*status);
+        if (buyerId) {
+            sql << " AND r.buyer_id = :buyerId";
         }
-
+        if (status) {
+            sql << " AND r.status = :status";
+        }
         sql << " GROUP BY dates.date ORDER BY dates.date";
 
         auto stmt = session->sql(sql.str());
-
-        for (auto& v : binds) stmt.bind(v);
-
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
         auto rows = stmt.execute();
-
         for (mysqlx::Row row : rows) {
             DailyStat stat{};
-            stat.date = row[0].get<std::string>();
+            stat.date = readString(row[0]);
             stat.total = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
-            stat.earnings = row[2].isNull() ? 0.0 : row[2].get<double>();
+            stat.earnings = readDouble(row[2]);
             items.emplace_back(std::move(stat));
         }
-    }
-    catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error,
-            std::string{ "查询每日统计失败: " } + err.what());
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询每日统计失败: "} + err.what());
         throw;
     }
     return items;
 }
 
-
-std::vector<ResultsRepository::HourlyStat>
-ResultsRepository::getHourlyStats(const std::optional<int>& buyerId,
-    const std::optional<int>& status) {
+std::vector<ResultsRepository::HourlyStat> ResultsRepository::getHourlyStats(const std::optional<int>& buyerId,
+                                                                             const std::optional<int>& status) {
     std::vector<HourlyStat> items;
     auto session = pool_.acquire();
-
     try {
         std::ostringstream sql;
-        sql << "SELECT hours.hour, IFNULL(COUNT(r.id), 0), IFNULL(SUM(r.actual_earnings), 0) "
-            "FROM (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 "
-            "UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 "
-            "UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10 UNION ALL SELECT 11 "
-            "UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 "
-            "UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 "
-            "UNION ALL SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours "
-            "LEFT JOIN results r "
-            "ON HOUR(r.start_time) = hours.hour AND r.start_time >= NOW() - INTERVAL 1 DAY";
-
-        std::vector<mysqlx::Value> binds;
+        sql << "SELECT hours.hour AS hour, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+               "FROM (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL "
+               "SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours "
+               "LEFT JOIN results r ON HOUR(r.start_time) = hours.hour AND r.start_time >= NOW() - INTERVAL 1 DAY";
         if (buyerId || status) {
             sql << " AND 1=1";
         }
         if (buyerId) {
-            sql << " AND r.buyer_id = ?";
-            binds.emplace_back(*buyerId);
+            sql << " AND r.buyer_id = :buyerId";
         }
         if (status) {
-            sql << " AND r.status = ?";
-            binds.emplace_back(*status);
+            sql << " AND r.status = :status";
         }
-
         sql << " GROUP BY hours.hour ORDER BY hours.hour";
 
         auto stmt = session->sql(sql.str());
-        for (auto& v : binds) stmt.bind(v);
-
+        if (buyerId) {
+            stmt.bind("buyerId", *buyerId);
+        }
+        if (status) {
+            stmt.bind("status", *status);
+        }
         auto rows = stmt.execute();
         for (mysqlx::Row row : rows) {
             HourlyStat stat{};
             stat.hour = row[0].isNull() ? 0 : row[0].get<int>();
             stat.total = row[1].isNull() ? 0 : row[1].get<std::int64_t>();
-            stat.earnings = row[2].isNull() ? 0.0 : row[2].get<double>();
+            stat.earnings = readDouble(row[2]);
             items.emplace_back(std::move(stat));
         }
-    }
-    catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error, std::string{ "查询每小时统计失败: " } + err.what());
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"查询每小时统计失败: "} + err.what());
         throw;
     }
-
     return items;
 }
 

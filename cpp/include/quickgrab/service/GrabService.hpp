@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <optional>
 
 namespace quickgrab::service {
 
@@ -28,6 +29,7 @@ public:
                 MailService& mailService);
 
     void processPending();
+    std::optional<int> handleRequest(const model::Request& request);
 
 private:
     void executeRequest(model::Request request);

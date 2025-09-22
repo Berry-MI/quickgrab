@@ -154,6 +154,24 @@ std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
     return oss.str();
 }
+
+mysqlx::Value makeNullValue() {
+    return mysqlx::Value();
+}
+
+mysqlx::Value toTimestampValue(const std::chrono::system_clock::time_point& tp) {
+    if (tp.time_since_epoch().count() == 0) {
+        return makeNullValue();
+    }
+    return mysqlx::Value(formatTimestamp(tp));
+}
+
+mysqlx::Value jsonOrNull(const boost::json::value& value) {
+    if (value.is_null()) {
+        return makeNullValue();
+    }
+    return mysqlx::Value(quickgrab::util::stringifyJson(value));
+}
 } // namespace
 
 RequestsRepository::RequestsRepository(MySqlConnectionPool& pool)
@@ -333,6 +351,65 @@ std::vector<model::Request> RequestsRepository::findByFilters(const std::optiona
         }
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"按条件查询抢购请求失败: "} + err.what());
+        throw;
+    }
+    return requests;
+}
+
+int RequestsRepository::insert(const model::Request& request) {
+    auto session = pool_.acquire();
+    try {
+        mysqlx::Schema schema = session->getSchema(pool_.schemaName());
+        mysqlx::Table table = schema.getTable("requests");
+        auto result = table
+                          .insert("device_id",
+                                  "buyer_id",
+                                  "thread_id",
+                                  "link",
+                                  "cookies",
+                                  "order_info",
+                                  "user_info",
+                                  "order_template",
+                                  "message",
+                                  "id_number",
+                                  "keyword",
+                                  "start_time",
+                                  "end_time",
+                                  "quantity",
+                                  "delay",
+                                  "frequency",
+                                  "type",
+                                  "status",
+                                  "order_parameters",
+                                  "actual_earnings",
+                                  "estimated_earnings",
+                                  "extension")
+                          .values(request.deviceId,
+                                  request.buyerId,
+                                  request.threadId,
+                                  request.link,
+                                  request.cookies,
+                                  jsonOrNull(request.orderInfo),
+                                  jsonOrNull(request.userInfo),
+                                  jsonOrNull(request.orderTemplate),
+                                  request.message,
+                                  request.idNumber,
+                                  request.keyword,
+                                  toTimestampValue(request.startTime),
+                                  toTimestampValue(request.endTime),
+                                  request.quantity,
+                                  request.delay,
+                                  request.frequency,
+                                  request.type,
+                                  request.status,
+                                  jsonOrNull(request.orderParameters),
+                                  request.actualEarnings,
+                                  request.estimatedEarnings,
+                                  jsonOrNull(request.extension))
+                          .execute();
+        return static_cast<int>(result.getAutoIncrementValue());
+    } catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{"Insert request failed: "} + err.what());
         throw;
     }
     return requests;

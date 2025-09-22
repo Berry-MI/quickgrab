@@ -14,8 +14,10 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include <ctime>
+#include <unordered_map>
 
 namespace quickgrab::repository {
 namespace {
@@ -156,6 +158,52 @@ std::chrono::system_clock::time_point parseDateTimeValue(
         util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
         return fallback;
     }
+}
+
+int readInt(const mysqlx::Value& value, const std::string& column, int defaultValue = 0) {
+    if (value.isNull()) {
+        return defaultValue;
+    }
+    try {
+        return static_cast<int>(value.get<std::int64_t>());
+    } catch (const std::exception&) {
+        try {
+            auto text = valueToString(value);
+            if (text.empty()) {
+                return defaultValue;
+            }
+            return std::stoi(text);
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      "Failed to read int column " + column + ": " + ex.what());
+            return defaultValue;
+        }
+    }
+}
+
+using ColumnIndex = std::unordered_map<std::string, std::size_t>;
+
+ColumnIndex buildColumnIndex(const mysqlx::Row& row) {
+    ColumnIndex index;
+    index.reserve(row.colCount());
+    for (std::size_t i = 0; i < row.colCount(); ++i) {
+        try {
+            auto name = row.getColumn(i).getColumnName();
+            index.emplace(std::move(name), i);
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      std::string{"Failed to read column metadata: "} + ex.what());
+        }
+    }
+    return index;
+}
+
+const mysqlx::Value* findValue(const mysqlx::Row& row, const ColumnIndex& index, std::string_view column) {
+    auto it = index.find(std::string(column));
+    if (it == index.end()) {
+        return nullptr;
+    }
+    return &row[it->second];
 }
 } // namespace
 
@@ -467,82 +515,92 @@ model::Result ResultsRepository::mapDetailedRow(mysqlx::Row row) {
         return result;
     }
 
-    result.id = row[0].isNull() ? 0 : row[0].get<int>();
-    if (row.colCount() > 1) {
-        result.requestId = row[1].isNull() ? 0 : row[1].get<int>();
+    auto index = buildColumnIndex(row);
+
+    if (const auto* value = findValue(row, index, "id")) {
+        result.id = readInt(*value, "id");
     }
-    if (row.colCount() > 2) {
-        result.deviceId = row[2].isNull() ? 0 : row[2].get<int>();
+    if (const auto* value = findValue(row, index, "request_id")) {
+        result.requestId = readInt(*value, "request_id");
     }
-    if (row.colCount() > 3) {
-        result.buyerId = row[3].isNull() ? 0 : row[3].get<int>();
+    if (const auto* value = findValue(row, index, "device_id")) {
+        result.deviceId = readInt(*value, "device_id");
     }
-    if (row.colCount() > 4) {
-        result.threadId = readString(row[4]);
+    if (const auto* value = findValue(row, index, "buyer_id")) {
+        result.buyerId = readInt(*value, "buyer_id");
     }
-    if (row.colCount() > 5) {
-        result.link = readString(row[5]);
+    if (const auto* value = findValue(row, index, "thread_id")) {
+        result.threadId = readString(*value);
     }
-    if (row.colCount() > 6) {
-        result.cookies = readString(row[6]);
+    if (const auto* value = findValue(row, index, "link")) {
+        result.link = readString(*value);
     }
-    if (row.colCount() > 7) {
-        result.orderInfo = parseJsonColumn(row[7], "order_info");
+    if (const auto* value = findValue(row, index, "cookies")) {
+        result.cookies = readString(*value);
     }
-    if (row.colCount() > 8) {
-        result.userInfo = parseJsonColumn(row[8], "user_info");
+    if (const auto* value = findValue(row, index, "order_info")) {
+        result.orderInfo = parseJsonColumn(*value, "order_info");
     }
-    if (row.colCount() > 9) {
-        result.orderTemplate = parseJsonColumn(row[9], "order_template");
+    if (const auto* value = findValue(row, index, "user_info")) {
+        result.userInfo = parseJsonColumn(*value, "user_info");
     }
-    if (row.colCount() > 10) {
-        result.message = readString(row[10]);
+    if (const auto* value = findValue(row, index, "order_template")) {
+        result.orderTemplate = parseJsonColumn(*value, "order_template");
     }
-    if (row.colCount() > 11) {
-        result.idNumber = readString(row[11]);
+    if (const auto* value = findValue(row, index, "message")) {
+        result.message = readString(*value);
     }
-    if (row.colCount() > 12) {
-        result.keyword = readString(row[12]);
+    if (const auto* value = findValue(row, index, "id_number")) {
+        result.idNumber = readString(*value);
     }
-    if (row.colCount() > 13) {
-        result.startTime = parseDateTimeValue(row[13]);
+    if (const auto* value = findValue(row, index, "keyword")) {
+        result.keyword = readString(*value);
     }
-    if (row.colCount() > 14) {
-        result.endTime = parseDateTimeValue(row[14]);
+    if (const auto* value = findValue(row, index, "start_time")) {
+        result.startTime = parseDateTimeValue(*value, {});
     }
-    if (row.colCount() > 15) {
-        result.quantity = row[15].isNull() ? 0 : row[15].get<int>();
+    if (const auto* value = findValue(row, index, "end_time")) {
+        result.endTime = parseDateTimeValue(*value, {});
     }
-    if (row.colCount() > 16) {
-        result.delay = row[16].isNull() ? 0 : row[16].get<int>();
+    if (const auto* value = findValue(row, index, "quantity")) {
+        result.quantity = readInt(*value, "quantity");
     }
-    if (row.colCount() > 17) {
-        result.frequency = row[17].isNull() ? 0 : row[17].get<int>();
+    if (const auto* value = findValue(row, index, "delay")) {
+        result.delay = readInt(*value, "delay");
     }
-    if (row.colCount() > 18) {
-        result.type = row[18].isNull() ? 0 : row[18].get<int>();
+    if (const auto* value = findValue(row, index, "frequency")) {
+        result.frequency = readInt(*value, "frequency");
     }
-    if (row.colCount() > 19) {
-        result.status = row[19].isNull() ? 0 : row[19].get<int>();
+    if (const auto* value = findValue(row, index, "type")) {
+        result.type = readInt(*value, "type");
     }
-    if (row.colCount() > 20) {
-        result.responseMessage = parseJsonColumn(row[20], "response_message");
+    if (const auto* value = findValue(row, index, "status")) {
+        result.status = readInt(*value, "status");
+    }
+    if (const auto* value = findValue(row, index, "response_message")) {
+        result.responseMessage = parseJsonColumn(*value, "response_message");
         if (result.payload.is_null()) {
             result.payload = result.responseMessage;
         }
     }
-    if (row.colCount() > 21) {
-        result.actualEarnings = readDouble(row[21]);
+    if (const auto* value = findValue(row, index, "actual_earnings")) {
+        result.actualEarnings = readDouble(*value);
     }
-    if (row.colCount() > 22) {
-        result.estimatedEarnings = readDouble(row[22]);
+    if (const auto* value = findValue(row, index, "estimated_earnings")) {
+        result.estimatedEarnings = readDouble(*value);
     }
-    if (row.colCount() > 23) {
-        result.extension = parseJsonColumn(row[23], "extension");
+    if (const auto* value = findValue(row, index, "extension")) {
+        result.extension = parseJsonColumn(*value, "extension");
     }
-    if (row.colCount() > 24 && !row[24].isNull()) {
+    if (const auto* value = findValue(row, index, "payload")) {
+        auto payload = parseJsonColumn(*value, "payload");
+        if (!payload.is_null()) {
+            result.payload = std::move(payload);
+        }
+    }
+    if (const auto* value = findValue(row, index, "created_at")) {
         try {
-            result.createdAt = parseTimestamp(row[24].get<std::string>());
+            result.createdAt = parseTimestamp(valueToString(*value));
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"Failed to parse result created_at: "} + ex.what());
         }
@@ -555,7 +613,7 @@ std::chrono::system_clock::time_point ResultsRepository::parseTimestamp(const st
         return std::chrono::system_clock::now();
     }
     std::tm tm{};
-    std::istringstream iss(value);
+    std::istringstream iss(sanitizeDateTimeString(value));
     iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
     if (iss.fail()) {
         return std::chrono::system_clock::now();

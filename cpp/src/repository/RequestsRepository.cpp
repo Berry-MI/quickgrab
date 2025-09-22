@@ -1,6 +1,7 @@
 #include "quickgrab/repository/RequestsRepository.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
+#include "quickgrab/repository/SqlUtils.hpp"
 
 #include <mysqlx/xdevapi.h>
 
@@ -249,11 +250,8 @@ std::vector<model::Request> RequestsRepository::findByFilters(const std::optiona
             sql << " AND status = :status";
         }
 
-        const int safeLimit = std::max(0, limit);
-        const int safeOffset = std::max(0, offset);
-
         sql << " ORDER BY " << orderColumn << ' ' << orderDirection;
-        sql << " LIMIT " << safeLimit << " OFFSET " << safeOffset;
+        sql << buildLimitOffsetClause(limit, offset);
 
         auto stmt = session->sql(sql.str());
         if (keyword && !keyword->empty()) {

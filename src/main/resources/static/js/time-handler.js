@@ -23,7 +23,7 @@ function fetchBuyers() {
             }
 
             let currentUser = data.username;
-            return fetch('/api/buyers').then(response => ({ response, currentUser }));
+            return fetch('/api/getBuyer').then(response => ({ response, currentUser }));
         })
         .then(({ response, currentUser }) => response.json().then(data => ({ data, currentUser })))
         .then(({ data, currentUser }) => {

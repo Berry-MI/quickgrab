@@ -1,0 +1,9 @@
+{
+  "endpoint": "https://dps.kdlapi.com/api/getdps/",
+  "secretId": "<your-secret-id>",
+  "signature": "<your-signature>",
+  "username": "<proxy-username>",
+  "password": "<proxy-password>",
+  "count": 5,
+  "refreshMinutes": 3
+}

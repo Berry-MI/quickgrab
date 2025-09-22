@@ -301,7 +301,7 @@ function setupButtonEvents(item, userInfo) {
         deleteButton.onclick = function () {
             const password = prompt('请输入密码：1');
             if (password === "1") {
-                fetch(`/deleteRequest/${item.id}`, {method: 'DELETE'})
+                fetch(`/api/deleteRequest/${item.id}`, {method: 'DELETE'})
                     .then(response => {
                         if (response.ok) {
                             showAlert('删除成功', 'success');
@@ -333,7 +333,7 @@ function setupButtonEvents(item, userInfo) {
 
     // 检查Cookies按钮事件
     document.getElementById('checkCookiesButton').onclick = function () {
-        fetch(`/checkCookiesValidity?cookies=${encodeURIComponent(item.cookies)}`)
+        fetch(`/api/checkCookiesValidity?cookies=${encodeURIComponent(item.cookies)}`)
             .then(response => response.json())
             .then(data => {
                 showAlert(data.message, 'info');

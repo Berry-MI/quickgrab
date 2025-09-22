@@ -4,6 +4,7 @@
 #include <mysqlx/common/value.h>
 #include <mysqlx/xdevapi.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iomanip>
@@ -14,6 +15,42 @@
 namespace quickgrab::repository {
 namespace {
 
+std::string valueToString(const mysqlx::Value& value) {
+    if (value.isNull()) {
+        return {};
+    }
+    try {
+        return value.get<std::string>();
+    } catch (const std::exception&) {
+        try {
+            std::ostringstream oss;
+            value.print(oss);
+            return oss.str();
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"字符串化列失败: "} + ex.what());
+            return {};
+        }
+    }
+}
+
+std::string sanitizeDateTimeString(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+    if (text.front() == '\'' && text.back() == '\'' && text.size() > 1) {
+        text = text.substr(1, text.size() - 2);
+    }
+    if (text.front() == '"' && text.back() == '"' && text.size() > 1) {
+        text = text.substr(1, text.size() - 2);
+    }
+    std::replace(text.begin(), text.end(), 'T', ' ');
+    auto dot = text.find('.');
+    if (dot != std::string::npos) {
+        text = text.substr(0, dot);
+    }
+    return text;
+}
+
 std::string readString(const mysqlx::Value& value) {
     if (value.isNull()) {
         return {};
@@ -21,8 +58,11 @@ std::string readString(const mysqlx::Value& value) {
     try {
         return value.get<std::string>();
     } catch (const std::exception& ex) {
-        util::log(util::LogLevel::warn, std::string{"读取字符串列失败: "} + ex.what());
-        return {};
+        auto fallback = valueToString(value);
+        if (fallback.empty()) {
+            util::log(util::LogLevel::warn, std::string{"读取字符串列失败: "} + ex.what());
+        }
+        return fallback;
     }
 }
 
@@ -33,8 +73,17 @@ int readInt(const mysqlx::Value& value) {
     try {
         return value.get<int>();
     } catch (const std::exception& ex) {
-        util::log(util::LogLevel::warn, std::string{"读取整数列失败: "} + ex.what());
-        return 0;
+        try {
+            auto text = valueToString(value);
+            if (text.empty()) {
+                util::log(util::LogLevel::warn, std::string{"读取整数列失败: "} + ex.what());
+                return 0;
+            }
+            return std::stoi(text);
+        } catch (const std::exception& inner) {
+            util::log(util::LogLevel::warn, std::string{"读取整数列失败: "} + inner.what());
+            return 0;
+        }
     }
 }
 
@@ -43,48 +92,23 @@ std::chrono::system_clock::time_point fromTm(const std::tm& tm) {
     return std::chrono::system_clock::from_time_t(std::mktime(&localTm));
 }
 
-std::chrono::system_clock::time_point fromDateTime(const mysqlx::datetime& dt) {
-    std::tm tm{};
-    tm.tm_year = static_cast<int>(dt.year) - 1900;
-    tm.tm_mon = static_cast<int>(dt.month) - 1;
-    tm.tm_mday = static_cast<int>(dt.day);
-    tm.tm_hour = static_cast<int>(dt.hour);
-    tm.tm_min = static_cast<int>(dt.minute);
-    tm.tm_sec = static_cast<int>(dt.second);
-    auto time = fromTm(tm);
-    if (dt.microsecond > 0) {
-        time += std::chrono::microseconds(dt.microsecond);
-    }
-    return time;
-}
-
 std::optional<std::chrono::system_clock::time_point> parseDateTime(const mysqlx::Value& value) {
     if (value.isNull()) {
         return std::nullopt;
     }
     try {
-        switch (value.getType()) {
-        case mysqlx::Value::Type::V_STRING:
-        case mysqlx::Value::Type::V_BYTES: {
-            const auto text = value.get<std::string>();
-            if (text.empty()) {
-                return std::nullopt;
-            }
-            std::tm tm{};
-            std::istringstream iss(text);
-            iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-            if (iss.fail()) {
-                util::log(util::LogLevel::warn, std::string{"解析日期列失败: "} + text);
-                return std::nullopt;
-            }
-            return fromTm(tm);
+        auto text = sanitizeDateTimeString(valueToString(value));
+        if (text.empty()) {
+            return std::nullopt;
         }
-        case mysqlx::Value::Type::V_DATETIME:
-            return fromDateTime(value.get<mysqlx::datetime>());
-        default:
-            break;
+        std::tm tm{};
+        std::istringstream iss(text);
+        iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        if (iss.fail()) {
+            util::log(util::LogLevel::warn, std::string{"解析日期列失败: "} + text);
+            return std::nullopt;
         }
-        return std::nullopt;
+        return fromTm(tm);
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn, std::string{"读取日期列失败: "} + ex.what());
         return std::nullopt;

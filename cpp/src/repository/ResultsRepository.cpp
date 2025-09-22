@@ -19,6 +19,42 @@
 
 namespace quickgrab::repository {
 namespace {
+std::string valueToString(const mysqlx::Value& value) {
+    if (value.isNull()) {
+        return {};
+    }
+    try {
+        return value.get<std::string>();
+    } catch (const std::exception&) {
+        try {
+            std::ostringstream oss;
+            value.print(oss);
+            return oss.str();
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"Failed to stringify value: "} + ex.what());
+            return {};
+        }
+    }
+}
+
+std::string sanitizeDateTimeString(std::string text) {
+    if (text.empty()) {
+        return text;
+    }
+    if (text.front() == '\'' && text.back() == '\'' && text.size() > 1) {
+        text = text.substr(1, text.size() - 2);
+    }
+    if (text.front() == '"' && text.back() == '"' && text.size() > 1) {
+        text = text.substr(1, text.size() - 2);
+    }
+    std::replace(text.begin(), text.end(), 'T', ' ');
+    auto dotPos = text.find('.');
+    if (dotPos != std::string::npos) {
+        text = text.substr(0, dotPos);
+    }
+    return text;
+}
+
 std::string formatTimestamp(std::chrono::system_clock::time_point tp) {
     auto tt = std::chrono::system_clock::to_time_t(tp);
     std::tm tm{};
@@ -68,7 +104,11 @@ double readDouble(const mysqlx::Value& value) {
         return value.get<double>();
     } catch (const std::exception&) {
         try {
-            return std::stod(value.get<std::string>());
+            auto text = valueToString(value);
+            if (text.empty()) {
+                return 0.0;
+            }
+            return std::stod(text);
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"Failed to read double column: "} + ex.what());
             return 0.0;
@@ -81,7 +121,7 @@ boost::json::value parseJsonColumn(const mysqlx::Value& value, const std::string
         return boost::json::value();
     }
     try {
-        return quickgrab::util::parseJson(value.get<std::string>());
+        return quickgrab::util::parseJson(valueToString(value));
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn, "JSON parse failed on column " + column + ": " + ex.what());
         return boost::json::value();
@@ -93,21 +133,6 @@ std::chrono::system_clock::time_point fromTm(const std::tm& tm) {
     return std::chrono::system_clock::from_time_t(std::mktime(&localTm));
 }
 
-std::chrono::system_clock::time_point fromDateTime(const mysqlx::datetime& dt) {
-    std::tm tm{};
-    tm.tm_year = static_cast<int>(dt.year) - 1900;
-    tm.tm_mon = static_cast<int>(dt.month) - 1;
-    tm.tm_mday = static_cast<int>(dt.day);
-    tm.tm_hour = static_cast<int>(dt.hour);
-    tm.tm_min = static_cast<int>(dt.minute);
-    tm.tm_sec = static_cast<int>(dt.second);
-    auto time = fromTm(tm);
-    if (dt.microsecond > 0) {
-        time += std::chrono::microseconds(dt.microsecond);
-    }
-    return time;
-}
-
 std::chrono::system_clock::time_point parseDateTimeValue(
     const mysqlx::Value& value,
     const std::chrono::system_clock::time_point& fallback = std::chrono::system_clock::now()) {
@@ -115,24 +140,18 @@ std::chrono::system_clock::time_point parseDateTimeValue(
         return fallback;
     }
     try {
-        switch (value.getType()) {
-        case mysqlx::Value::Type::V_STRING:
-        case mysqlx::Value::Type::V_BYTES: {
-            std::tm tm{};
-            std::istringstream iss(value.get<std::string>());
-            iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-            if (iss.fail()) {
-                util::log(util::LogLevel::warn, "Failed to parse datetime text value");
-                return fallback;
-            }
-            return fromTm(tm);
+        auto text = sanitizeDateTimeString(valueToString(value));
+        if (text.empty()) {
+            return fallback;
         }
-        case mysqlx::Value::Type::V_DATETIME:
-            return fromDateTime(value.get<mysqlx::datetime>());
-        default:
-            break;
+        std::tm tm{};
+        std::istringstream iss(text);
+        iss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        if (iss.fail()) {
+            util::log(util::LogLevel::warn, "Failed to parse datetime text value");
+            return fallback;
         }
-        return fallback;
+        return fromTm(tm);
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn, std::string{"Failed to parse datetime column: "} + ex.what());
         return fallback;

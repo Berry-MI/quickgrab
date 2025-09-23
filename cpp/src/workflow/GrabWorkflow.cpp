@@ -1,14 +1,16 @@
 #include \"quickgrab/workflow/GrabWorkflow.hpp\"
 #include \"quickgrab/util/JsonUtil.hpp\"
 
-#include <cmath>
-#include <thread>
-#include <cctype>
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cctype>
+#include <random>
+#include <string_view>
+#include <thread>
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
-#include <random>
 #include <boost/asio/post.hpp>
 
 namespace quickgrab::workflow {
@@ -16,6 +18,33 @@ namespace {
 constexpr int kMaxRetries = 3;
 constexpr char kUserAgent[] = "Android/9 WDAPP(WDBuyer/7.6.2) Thor/2.3.25";
 constexpr char kReferer[] = "https://android.weidian.com/";
+
+constexpr std::array<std::string_view, 11> kRetryKeywords{
+    "请稍后再试",
+    "拥挤",
+    "重试",
+    "稍后",
+    "人潮拥挤",
+    "商品尚未开售",
+    "开小差",
+    "系统开小差",
+    "系统开小差了",
+    "啊哦~ 人潮拥挤，请稍后重试~",
+    "请升级到最新版本后重试"};
+
+constexpr std::array<std::string_view, 12> kUpdateKeywords{
+    "确认",
+    "地址",
+    "自提",
+    "应付总额有变动，请再次确认",
+    "商品信息变更，请重新确认",
+    "模板需要收货地址，请联系商家",
+    "店铺信息不能为空",
+    "购买的商品超过限购数",
+    "请先填写收货人地址",
+    "当前下单商品仅支持到店自提，请重新选择收货方式",
+    "系统开小差，请稍后重试",
+    "自提点地址不能为空"};
 
 std::string randomDomain(const boost::json::object& extension) {
     if (auto it = extension.if_contains("domains")) {
@@ -27,6 +56,16 @@ std::string randomDomain(const boost::json::object& extension) {
         }
     }
     return "thor.weidian.com";
+}
+
+template <std::size_t N>
+bool containsKeyword(std::string_view message, const std::array<std::string_view, N>& keywords) {
+    for (auto keyword : keywords) {
+        if (message.find(keyword) != std::string_view::npos) {
+            return true;
+        }
+    }
+    return false;
 }
 
 long computeDelay(const GrabContext& ctx) {
@@ -72,9 +111,11 @@ std::string toQuery(const std::string& payload) {
 }
 
 GrabWorkflow::GrabWorkflow(boost::asio::io_context& io,
+                           boost::asio::thread_pool& worker,
                            util::HttpClient& httpClient,
                            proxy::ProxyPool& proxyPool)
     : io_(io)
+    , worker_(worker)
     , httpClient_(httpClient)
     , proxyPool_(proxyPool) {}
 
@@ -93,6 +134,28 @@ void GrabWorkflow::prepareContext(const model::Request& request, GrabContext& ct
     ctx.quickMode = tryGetBool(ctx.extension, "quickMode", false);
     ctx.steadyOrder = tryGetBool(ctx.extension, "steadyOrder", false);
     ctx.autoPick = tryGetBool(ctx.extension, "autoPick", false);
+    if (auto metric = ctx.extension.if_contains("__adjustedFactor")) {
+        if (metric->is_int64()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_int64());
+        } else if (metric->is_double()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_double());
+        }
+    } else if (auto metric = ctx.extension.if_contains("adjustedFactor")) {
+        if (metric->is_int64()) {
+            ctx.adjustedFactor = static_cast<long>(metric->as_int64());
+        }
+    }
+    if (auto metric = ctx.extension.if_contains("__processingTime")) {
+        if (metric->is_int64()) {
+            ctx.processingTime = static_cast<long>(metric->as_int64());
+        } else if (metric->is_double()) {
+            ctx.processingTime = static_cast<long>(metric->as_double());
+        }
+    } else if (auto metric = ctx.extension.if_contains("processingTime")) {
+        if (metric->is_int64()) {
+            ctx.processingTime = static_cast<long>(metric->as_int64());
+        }
+    }
 }
 
 GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::object& payload) {
@@ -106,32 +169,59 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
             auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{30});
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
-            result.payload = json;
+            result.response = json;
+            result.attempts = attempt + 1;
             if (json.is_object()) {
                 const auto& obj = json.as_object();
-                if (auto status = obj.if_contains("status")) {
-                    if (status->is_object()) {
-                        auto& statusObj = status->as_object();
-                        result.message = statusObj.if_contains("description") ? statusObj["description"].as_string().c_str() : "";
-                        result.statusCode = static_cast<int>(statusObj.if_contains("code") ? statusObj["code"].as_int64() : result.statusCode);
+                if (auto* status = obj.if_contains("status"); status && status->is_object()) {
+                    const auto& statusObj = status->as_object();
+                    if (auto* description = statusObj.if_contains("description"); description && description->is_string()) {
+                        result.message = std::string(description->as_string());
+                    }
+                    if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                        result.statusCode = static_cast<int>(code->as_int64());
                     }
                 }
-                result.success = obj.if_contains("isSuccess") && obj["isSuccess"].as_int64() == 1;
-                result.shouldUpdate = obj.if_contains("isUpdate") && obj["isUpdate"].as_bool();
-                result.shouldContinue = obj.if_contains("isContinue") && obj["isContinue"].as_bool();
+
+                result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
+                if (result.success) {
+                    result.shouldContinue = false;
+                    result.shouldUpdate = false;
+                    return result;
+                }
+
+                bool updateHint = containsKeyword(result.message, kUpdateKeywords) ||
+                                   (obj.if_contains("isUpdate") && obj.at("isUpdate").is_bool() && obj.at("isUpdate").as_bool());
+                bool retryHint = containsKeyword(result.message, kRetryKeywords) ||
+                                 (obj.if_contains("isContinue") && obj.at("isContinue").is_bool() && obj.at("isContinue").as_bool());
+
+                result.shouldUpdate = updateHint;
+                result.shouldContinue = retryHint || updateHint;
+                if (!result.shouldContinue) {
+                    return result;
+                }
+            } else {
+                result.message = "未知响应";
+                result.shouldContinue = false;
+                return result;
             }
             return result;
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
             if (attempt == kMaxRetries) {
                 result.success = false;
-                result.message = ex.what();
+                result.error = ex.what();
+                result.message.clear();
                 return result;
             }
-            auto waitTime = std::chrono::milliseconds(static_cast<int>(std::pow(2.0, attempt) * 100));
+            static thread_local std::mt19937 rng{std::random_device{}()};
+            auto base = static_cast<int>(std::pow(2.0, attempt) * 100);
+            std::uniform_int_distribution<int> jitter(-base / 5, base / 5);
+            auto waitTime = std::chrono::milliseconds(base + jitter(rng));
             std::this_thread::sleep_for(waitTime);
         }
     }
+    result.error = "CreateOrder exhausted retries";
     return result;
 }
 
@@ -145,13 +235,17 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
             auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{20});
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
+            result.attempts = attempt + 1;
             if (json.is_object() && json.as_object().if_contains("result")) {
-                result.payload = json.as_object()["result"];
+                result.response = json.as_object().at("result");
                 result.success = true;
                 return result;
             }
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
+            if (attempt == kMaxRetries) {
+                result.error = ex.what();
+            }
         }
         if (attempt < kMaxRetries) {
             auto waitTime = std::chrono::milliseconds(static_cast<int>(std::pow(2.0, attempt) * 80));
@@ -159,17 +253,39 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
         }
     }
     result.success = false;
+    if (result.error.empty()) {
+        result.error = "ReConfirmOrder exhausted retries";
+    }
     return result;
 }
 
 void GrabWorkflow::scheduleExecution(GrabContext ctx,
                                      std::function<void(const GrabResult&)> onFinished) {
-    auto payloadValue = ctx.request.orderParameters;
     boost::json::object payload;
-    if (payloadValue.is_object()) {
-        payload = payloadValue.as_object();
-    } else {
+    bool hasPayload = false;
+    if (ctx.request.orderParameters.is_object()) {
+        payload = ctx.request.orderParameters.as_object();
+        hasPayload = true;
+    } else if (!ctx.request.orderParametersRaw.empty()) {
+        try {
+            auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
+            if (parsed.is_object()) {
+                payload = parsed.as_object();
+                hasPayload = true;
+            } else {
+                util::log(util::LogLevel::warn,
+                          "请求 id=" + std::to_string(ctx.request.id) + " 的订单参数不是 JSON 对象，使用默认模板");
+            }
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      "解析订单参数失败 id=" + std::to_string(ctx.request.id) + " error=" + ex.what());
+        }
+    }
+    if (!hasPayload) {
         payload = buildBasePayload(ctx);
+    } else {
+        ctx.request.orderParameters = payload;
+        ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
     }
 
     auto delay = computeDelay(ctx);
@@ -197,8 +313,8 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
             auto result = createOrder(ctx, payload);
             if (result.shouldContinue || result.shouldUpdate) {
                 auto confirm = reConfirmOrder(ctx, payload);
-                if (confirm.success && confirm.payload.is_object()) {
-                    auto& confirmObj = confirm.payload.as_object();
+                if (confirm.success && confirm.response.is_object()) {
+                    auto& confirmObj = confirm.response.as_object();
                     if (auto extra = confirmObj.if_contains("extra"); extra && extra->is_object()) {
                         payload["extra"] = *extra;
                     }
@@ -223,6 +339,7 @@ GrabWorkflow::buildPost(const std::string& url,
     auto pathPos = url.find('/', hostStart);
     std::string host = pathPos == std::string::npos ? url.substr(hostStart) : url.substr(hostStart, pathPos - hostStart);
     std::string target = pathPos == std::string::npos ? "/" : url.substr(pathPos);
+    std::string scheme = schemePos == std::string::npos ? "https" : url.substr(0, schemePos);
 
     boost::beast::http::request<boost::beast::http::string_body> req{boost::beast::http::verb::post, target, 11};
     req.set(boost::beast::http::field::host, host);
@@ -240,6 +357,15 @@ boost::json::object GrabWorkflow::buildBasePayload(const GrabContext& ctx) const
     boost::json::object payload;
     if (ctx.request.orderParameters.is_object()) {
         return ctx.request.orderParameters.as_object();
+    }
+    if (!ctx.request.orderParametersRaw.empty()) {
+        try {
+            auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
+            if (parsed.is_object()) {
+                return parsed.as_object();
+            }
+        } catch (const std::exception&) {
+        }
     }
     payload["buyer_id"] = ctx.request.buyerId;
     payload["device_id"] = ctx.request.deviceId;

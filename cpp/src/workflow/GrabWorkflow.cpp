@@ -1,4 +1,5 @@
 #include "quickgrab/workflow/GrabWorkflow.hpp"
+#include "quickgrab/util/CommonUtil.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/WeidianParser.hpp"
 
@@ -409,7 +410,7 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
         return;
     }
 
-    auto orderParams = buildOrderParameters(*dataObj);
+    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *dataObj, true);
     if (!orderParams) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 解析下单数据失败，将尝试使用已有参数");
@@ -457,32 +458,6 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
                       " 获取下单页面失败: " + ex.what());
         return std::nullopt;
     }
-}
-
-std::optional<boost::json::object> GrabWorkflow::buildOrderParameters(const boost::json::object& dataObj) const {
-    auto orderIt = dataObj.if_contains("order");
-    if (!orderIt || !orderIt->is_object()) {
-        return std::nullopt;
-    }
-    const auto& orderObj = orderIt->as_object();
-    if (auto statusIt = orderObj.if_contains("status"); statusIt && statusIt->is_object()) {
-        const auto& statusObj = statusIt->as_object();
-        if (auto message = statusObj.if_contains("message"); message && message->is_string()) {
-            if (std::string(message->as_string().c_str()) != "OK") {
-                return std::nullopt;
-            }
-        }
-    }
-    auto resultIt = orderObj.if_contains("result");
-    if (!resultIt || !resultIt->is_object()) {
-        return std::nullopt;
-    }
-
-    boost::json::object params{resultIt->as_object()};
-    if (auto confirm = dataObj.if_contains("confirmOrderParam")) {
-        params["confirmOrderParam"] = *confirm;
-    }
-    return params;
 }
 
 boost::beast::http::request<boost::beast::http::string_body>

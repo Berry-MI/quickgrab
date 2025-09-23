@@ -64,7 +64,6 @@ private:
 
     void refreshOrderParameters(GrabContext& ctx);
     std::optional<boost::json::object> fetchAddOrderData(const GrabContext& ctx) const;
-    std::optional<boost::json::object> buildOrderParameters(const boost::json::object& dataObj) const;
 
     boost::beast::http::request<boost::beast::http::string_body>
     buildPost(const std::string& url,

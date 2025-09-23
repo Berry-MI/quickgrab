@@ -372,7 +372,7 @@ void ResultsRepository::insertResult(const model::Result& result) {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("results");
         auto responsePayload = result.responseMessage.is_null() ? result.payload : result.responseMessage;
-        table.insert("id",
+        table.insert("request_id",
                     "device_id",
                     "buyer_id",
                     "thread_id",
@@ -475,7 +475,7 @@ std::vector<model::Result> ResultsRepository::findByFilters(
     auto session = pool_.acquire();
     try {
         std::ostringstream sql;
-        sql << "SELECT id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
+        sql << "SELECT id, request_id, device_id, buyer_id, thread_id, link, cookies, order_info, user_info, order_template, "
             "message, id_number, keyword, "
             "DATE_FORMAT(start_time, '%Y-%m-%d %H:%i:%s') AS start_time, "
             "DATE_FORMAT(end_time,   '%Y-%m-%d %H:%i:%s') AS end_time, "

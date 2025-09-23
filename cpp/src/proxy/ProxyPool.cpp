@@ -4,6 +4,16 @@
 #include <chrono>
 
 namespace quickgrab::proxy {
+namespace {
+
+bool compareProxy(const ProxyEndpoint& lhs, const ProxyEndpoint& rhs) {
+    if (lhs.latency == rhs.latency) {
+        return lhs.nextAvailable < rhs.nextAvailable;
+    }
+    return lhs.latency < rhs.latency;
+}
+
+} // namespace
 
 ProxyPool::ProxyPool(std::chrono::seconds cooldown)
     : cooldown_(cooldown) {}
@@ -14,21 +24,18 @@ std::optional<ProxyEndpoint> ProxyPool::acquire(const std::string& affinityKey) 
 
     auto it = sticky_.find(affinityKey);
     if (it != sticky_.end()) {
-        if (it->second.nextAvailable <= now) {
-            ProxyEndpoint proxy = it->second;
-            sticky_.erase(it);
-            return proxy;
-        }
+        it->second.nextAvailable = now + cooldown_;
+        return it->second;
     }
 
-    while (!pool_.empty()) {
-        if (pool_.front().nextAvailable <= now) {
-            ProxyEndpoint proxy = pool_.front();
-            pool_.pop_front();
-            sticky_.emplace(affinityKey, proxy);
-            return proxy;
+    for (auto poolIt = pool_.begin(); poolIt != pool_.end(); ++poolIt) {
+        if (poolIt->nextAvailable <= now) {
+            ProxyEndpoint proxy = *poolIt;
+            pool_.erase(poolIt);
+            proxy.nextAvailable = now + cooldown_;
+            auto inserted = sticky_.insert_or_assign(affinityKey, proxy);
+            return inserted.first->second;
         }
-        break;
     }
 
     return std::nullopt;
@@ -36,10 +43,9 @@ std::optional<ProxyEndpoint> ProxyPool::acquire(const std::string& affinityKey) 
 
 void ProxyPool::reportSuccess(const std::string& affinityKey, ProxyEndpoint proxy) {
     proxy.failureCount = 0;
-    proxy.nextAvailable = std::chrono::steady_clock::now();
+    proxy.nextAvailable = std::chrono::steady_clock::now() + cooldown_;
     std::scoped_lock lock(mutex_);
-    sticky_.erase(affinityKey);
-    pool_.push_back(std::move(proxy));
+    sticky_[affinityKey] = std::move(proxy);
 }
 
 void ProxyPool::reportFailure(const std::string& affinityKey, ProxyEndpoint proxy) {
@@ -48,15 +54,18 @@ void ProxyPool::reportFailure(const std::string& affinityKey, ProxyEndpoint prox
     std::scoped_lock lock(mutex_);
     sticky_.erase(affinityKey);
     pool_.push_back(std::move(proxy));
+    std::stable_sort(pool_.begin(), pool_.end(), compareProxy);
 }
 
 void ProxyPool::hydrate(std::vector<ProxyEndpoint> fresh) {
+    if (fresh.empty()) {
+        return;
+    }
     std::scoped_lock lock(mutex_);
     for (auto& proxy : fresh) {
-        proxy.failureCount = 0;
-        proxy.nextAvailable = std::chrono::steady_clock::now();
         pool_.push_back(std::move(proxy));
     }
+    std::stable_sort(pool_.begin(), pool_.end(), compareProxy);
 }
 
 void ProxyPool::tick() {
@@ -64,15 +73,13 @@ void ProxyPool::tick() {
     std::scoped_lock lock(mutex_);
     for (auto it = sticky_.begin(); it != sticky_.end();) {
         if (it->second.nextAvailable <= now) {
-            pool_.push_back(it->second);
+            pool_.push_back(std::move(it->second));
             it = sticky_.erase(it);
         } else {
             ++it;
         }
     }
-    std::stable_sort(pool_.begin(), pool_.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.nextAvailable < rhs.nextAvailable;
-    });
+    std::stable_sort(pool_.begin(), pool_.end(), compareProxy);
 }
 
 } // namespace quickgrab::proxy

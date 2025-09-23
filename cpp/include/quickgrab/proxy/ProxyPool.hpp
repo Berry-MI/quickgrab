@@ -17,6 +17,7 @@ struct ProxyEndpoint {
     std::string password;
     std::chrono::steady_clock::time_point nextAvailable{};
     int failureCount{};
+    std::chrono::milliseconds latency{std::chrono::milliseconds::max()};
 };
 
 class ProxyPool {

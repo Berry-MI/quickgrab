@@ -878,7 +878,8 @@ void ProxyController::handleList(quickgrab::server::RequestContext& ctx) {
             {"username", proxy.username},
             {"password", proxy.password},
             {"nextAvailable", static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(proxy.nextAvailable.time_since_epoch()).count())},
-            {"failureCount", proxy.failureCount}
+            {"failureCount", proxy.failureCount},
+            {"latency", static_cast<std::int64_t>(proxy.latency.count())}
         });
     }
     sendJsonResponse(ctx, boost::beast::http::status::ok, boost::json::serialize(payload));
@@ -901,6 +902,13 @@ void ProxyController::handleHydrate(quickgrab::server::RequestContext& ctx) {
             if (auto it = obj.if_contains("port")) endpoint.port = static_cast<std::uint16_t>(it->as_int64());
             if (auto it = obj.if_contains("username")) endpoint.username = it->is_string() ? std::string(it->as_string()) : "";
             if (auto it = obj.if_contains("password")) endpoint.password = it->is_string() ? std::string(it->as_string()) : "";
+            if (auto it = obj.if_contains("latency")) {
+                if (it->is_int64()) {
+                    endpoint.latency = std::chrono::milliseconds(it->as_int64());
+                } else if (it->is_double()) {
+                    endpoint.latency = std::chrono::milliseconds(static_cast<std::int64_t>(it->as_double()));
+                }
+            }
             endpoint.nextAvailable = std::chrono::steady_clock::now();
             proxies.push_back(std::move(endpoint));
         }

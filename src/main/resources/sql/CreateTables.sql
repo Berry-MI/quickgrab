@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS requests
 CREATE TABLE IF NOT EXISTS results
 (
     id                 INT AUTO_INCREMENT PRIMARY KEY COMMENT '主键，自动递增',
+    request_id         INT COMMENT '关联请求ID',
     device_id          INT NOT NULL COMMENT '设备ID',
     buyer_id           INT NOT NULL COMMENT '抢购者ID',
     thread_id          VARCHAR(50) COMMENT '线程ID',
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS results
     actual_earnings    DECIMAL(10, 2) COMMENT '实际收益',
     estimated_earnings DECIMAL(10, 2) COMMENT '预估收益',
     extension          TEXT COMMENT '扩展',
+    FOREIGN KEY (request_id) REFERENCES requests (id),
     FOREIGN KEY (device_id) REFERENCES devices (id),
     FOREIGN KEY (buyer_id) REFERENCES buyers (id)
 ) COMMENT ='存储抢购结果的表';

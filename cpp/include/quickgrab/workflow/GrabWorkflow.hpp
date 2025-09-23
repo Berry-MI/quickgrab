@@ -40,6 +40,8 @@ struct GrabContext {
     bool quickMode{false};
     bool steadyOrder{false};
     bool autoPick{false};
+    bool useProxy{false};
+    std::string proxyAffinity;
 };
 
 class GrabWorkflow {

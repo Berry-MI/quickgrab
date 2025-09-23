@@ -221,6 +221,17 @@ void GrabWorkflow::prepareContext(const model::Request& request, GrabContext& ct
             ctx.processingTime = static_cast<long>(metric->as_int64());
         }
     }
+
+    ctx.useProxy = shouldUseProxy(ctx.extension);
+    ctx.proxyAffinity = resolveAffinity(ctx.extension);
+    if (ctx.useProxy) {
+        if (ctx.proxyAffinity.empty()) {
+            ctx.proxyAffinity = ctx.request.threadId;
+        }
+        if (ctx.proxyAffinity.empty()) {
+            ctx.useProxy = false;
+        }
+    }
 }
 
 GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::object& payload) {
@@ -231,7 +242,10 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         try {
-            auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{30});
+            auto response = httpClient_.fetch(req,
+                                             ctx.useProxy ? ctx.proxyAffinity : ctx.request.threadId,
+                                             std::chrono::seconds{30},
+                                             ctx.useProxy);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.response = json;
@@ -297,7 +311,10 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         try {
-            auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{20});
+            auto response = httpClient_.fetch(req,
+                                             ctx.useProxy ? ctx.proxyAffinity : ctx.request.threadId,
+                                             std::chrono::seconds{20},
+                                             ctx.useProxy);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.attempts = attempt + 1;
@@ -443,23 +460,17 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
         {"Referer", "https://weidian.com/"},
         {"User-Agent", kDesktopUA}};
 
-    bool useProxy = shouldUseProxy(ctx.extension);
-    std::string affinity = resolveAffinity(ctx.extension);
-    if (useProxy && affinity.empty()) {
-        useProxy = false;
-    }
-
     try {
         auto response = httpClient_.fetch("GET",
                                           ctx.request.link,
                                           headers,
                                           "",
-                                          affinity,
+                                          ctx.useProxy ? ctx.proxyAffinity : ctx.request.threadId,
                                           std::chrono::seconds{30},
                                           true,
                                           5,
                                           nullptr,
-                                          useProxy);
+                                          ctx.useProxy);
         auto data = util::extractDataObject(response.body());
         if (!data || !data->is_object()) {
             return std::nullopt;

@@ -42,6 +42,7 @@ struct GrabContext {
     bool autoPick{false};
     bool useProxy{false};
     std::string proxyAffinity;
+    std::optional<proxy::ProxyEndpoint> assignedProxy;
 };
 
 class GrabWorkflow {

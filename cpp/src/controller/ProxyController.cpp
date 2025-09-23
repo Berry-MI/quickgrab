@@ -430,10 +430,8 @@ void proxyResponseToContext(quickgrab::server::RequestContext& ctx,
 
 } // namespace
 
-ProxyController::ProxyController(service::ProxyService& proxies,
-                                 util::HttpClient& client)
-    : proxies_(proxies)
-    , httpClient_(client) {}
+ProxyController::ProxyController(util::HttpClient& client)
+    : httpClient_(client) {}
 
 void ProxyController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/upload", [this](auto& ctx) { handleUpload(ctx); });
@@ -444,8 +442,6 @@ void ProxyController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/getUserInfo", [this](auto& ctx) { handleGetUserInfo(ctx); });
     router.addRoute("POST", "/api/getAddOrderData", [this](auto& ctx) { handleGetAddOrderData(ctx); });
     router.addRoute("POST", "/api/proxy", [this](auto& ctx) { handleProxyRequest(ctx); });
-    router.addRoute("GET", "/api/proxies", [this](auto& ctx) { handleList(ctx); });
-    router.addRoute("POST", "/api/proxies/hydrate", [this](auto& ctx) { handleHydrate(ctx); });
 }
 
 void ProxyController::handleUpload(quickgrab::server::RequestContext& ctx) {
@@ -864,58 +860,6 @@ void ProxyController::handleProxyRequest(quickgrab::server::RequestContext& ctx)
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::error, std::string{"proxyRequest failed: "} + ex.what());
         sendJsonResponse(ctx, boost::beast::http::status::internal_server_error,
-                         std::string("{\"error\":\"") + ex.what() + "\"}");
-    }
-}
-
-void ProxyController::handleList(quickgrab::server::RequestContext& ctx) {
-    auto proxies = proxies_.listProxies();
-    boost::json::array payload;
-    for (const auto& proxy : proxies) {
-        payload.emplace_back(boost::json::object{
-            {"host", proxy.host},
-            {"port", proxy.port},
-            {"username", proxy.username},
-            {"password", proxy.password},
-            {"nextAvailable", static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(proxy.nextAvailable.time_since_epoch()).count())},
-            {"failureCount", proxy.failureCount},
-            {"latency", static_cast<std::int64_t>(proxy.latency.count())}
-        });
-    }
-    sendJsonResponse(ctx, boost::beast::http::status::ok, boost::json::serialize(payload));
-}
-
-void ProxyController::handleHydrate(quickgrab::server::RequestContext& ctx) {
-    try {
-        auto json = boost::json::parse(ctx.request.body());
-        if (!json.is_array()) {
-            throw std::runtime_error("payload must be array");
-        }
-        std::vector<proxy::ProxyEndpoint> proxies;
-        for (const auto& item : json.as_array()) {
-            if (!item.is_object()) {
-                continue;
-            }
-            proxy::ProxyEndpoint endpoint;
-            const auto& obj = item.as_object();
-            if (auto it = obj.if_contains("host")) endpoint.host = std::string(it->as_string());
-            if (auto it = obj.if_contains("port")) endpoint.port = static_cast<std::uint16_t>(it->as_int64());
-            if (auto it = obj.if_contains("username")) endpoint.username = it->is_string() ? std::string(it->as_string()) : "";
-            if (auto it = obj.if_contains("password")) endpoint.password = it->is_string() ? std::string(it->as_string()) : "";
-            if (auto it = obj.if_contains("latency")) {
-                if (it->is_int64()) {
-                    endpoint.latency = std::chrono::milliseconds(it->as_int64());
-                } else if (it->is_double()) {
-                    endpoint.latency = std::chrono::milliseconds(static_cast<std::int64_t>(it->as_double()));
-                }
-            }
-            endpoint.nextAvailable = std::chrono::steady_clock::now();
-            proxies.push_back(std::move(endpoint));
-        }
-        proxies_.addProxies(std::move(proxies));
-        sendJsonResponse(ctx, boost::beast::http::status::ok, "{\"status\":\"ok\"}");
-    } catch (const std::exception& ex) {
-        sendJsonResponse(ctx, boost::beast::http::status::bad_request,
                          std::string("{\"error\":\"") + ex.what() + "\"}");
     }
 }

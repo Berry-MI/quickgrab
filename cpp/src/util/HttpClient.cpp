@@ -190,21 +190,34 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
     request.erase(boost::beast::http::field::host);
     request.set(boost::beast::http::field::host, parsed.host);
 
-    std::optional<proxy::ProxyEndpoint> proxy;
-    if (useProxy) {
+    const proxy::ProxyEndpoint* proxyPtr = overrideProxy;
+    std::optional<proxy::ProxyEndpoint> acquired;
+    if (useProxy && proxyPtr == nullptr) {
         if (affinityKey.empty()) {
             util::log(util::LogLevel::warn, "Proxy requested but affinity key is empty; sending directly");
         } else {
-            proxy = proxyPool_.acquire(affinityKey);
-            if (!proxy) {
+            acquired = proxyPool_.acquire(affinityKey);
+            if (!acquired) {
                 util::log(util::LogLevel::warn, "No proxy available for affinity key " + affinityKey);
+            } else {
+                proxyPtr = &*acquired;
             }
         }
     }
+    auto reportSuccess = [&]() {
+        if (acquired) {
+            proxyPool_.reportSuccess(affinityKey, *acquired);
+        }
+    };
+    auto reportFailure = [&]() {
+        if (acquired) {
+            proxyPool_.reportFailure(affinityKey, *acquired);
+        }
+    };
     try {
-        if (proxy) {
+        if (proxyPtr) {
             boost::asio::ip::tcp::resolver resolver(io_);
-            auto proxyResults = resolver.resolve(proxy->host, std::to_string(proxy->port));
+            auto proxyResults = resolver.resolve(proxyPtr->host, std::to_string(proxyPtr->port));
 
             if (parsed.scheme == "https") {
                 boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
@@ -215,7 +228,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 boost::beast::http::request<boost::beast::http::empty_body> connectRequest{
                     boost::beast::http::verb::connect, authorityFrom(parsed), kHttpVersion};
                 connectRequest.set(boost::beast::http::field::host, authorityFrom(parsed));
-                if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
+                if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
                     connectRequest.set("Proxy-Authorization", auth);
                 }
 
@@ -249,7 +262,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     throw boost::system::system_error(ec);
                 }
 
-                proxyPool_.reportSuccess(affinityKey, *proxy);
+                reportSuccess();
                 return response;
             }
 
@@ -259,7 +272,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
             HttpRequest proxiedRequest = request;
             proxiedRequest.target(parsed.scheme + "://" + authorityFrom(parsed) + parsed.target);
-            if (auto auth = proxyAuthorization(*proxy); !auth.empty()) {
+            if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
                 proxiedRequest.set("Proxy-Authorization", auth);
             }
 
@@ -277,7 +290,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 throw std::runtime_error("Proxy authentication required");
             }
 
-            proxyPool_.reportSuccess(affinityKey, *proxy);
+            reportSuccess();
             return response;
         }
 
@@ -324,9 +337,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
         }
         return response;
     } catch (...) {
-        if (proxy) {
-            proxyPool_.reportFailure(affinityKey, *proxy);
-        }
+        reportFailure();
         throw;
     }
 }
@@ -340,7 +351,8 @@ HttpClient::HttpResponse HttpClient::fetch(const std::string& method,
                                            bool followRedirects,
                                            unsigned int maxRedirects,
                                            std::string* effectiveUrl,
-                                           bool useProxy)
+                                           bool useProxy,
+                                           const proxy::ProxyEndpoint* overrideProxy)
 {
     std::string currentUrl = url;
     std::string currentMethod = method;
@@ -362,7 +374,7 @@ HttpClient::HttpResponse HttpClient::fetch(const std::string& method,
             request.prepare_payload();
         }
 
-        response = fetch(std::move(request), affinityKey, timeout, useProxy);
+        response = fetch(std::move(request), affinityKey, timeout, useProxy, overrideProxy);
 
         if (effectiveUrl) {
             *effectiveUrl = currentUrl;

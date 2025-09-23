@@ -12,6 +12,7 @@
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
 #include <boost/asio/post.hpp>
+#include <iostream>
 
 namespace quickgrab::workflow {
 namespace {
@@ -262,13 +263,14 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
 void GrabWorkflow::scheduleExecution(GrabContext ctx,
                                      std::function<void(const GrabResult&)> onFinished) {
     auto payloadValue = ctx.request.orderParameters;
+    std::cout << "payload = " << boost::json::serialize(payloadValue) << std::endl;
     boost::json::object payload;
     if (payloadValue.is_object()) {
         payload = payloadValue.as_object();
     } else {
         payload = buildBasePayload(ctx);
     }
-
+    std::cout << "payload = " << boost::json::serialize(payload) << std::endl;
     auto delay = computeDelay(ctx);
     util::log(util::LogLevel::info, "请求ID=" + std::to_string(ctx.request.id) +
         (ctx.quickMode ? " [快速模式]" : "") +

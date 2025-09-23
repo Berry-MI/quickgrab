@@ -47,6 +47,7 @@ private:
     proxy::ProxyPool& proxyPool_;
     MailService& mailService_;
     std::unique_ptr<workflow::GrabWorkflow> workflow_;
+    std::atomic<bool> pendingDrainInFlight_{false};
     std::atomic<long> adjustedFactor_;
     long processingTime_;
     std::chrono::system_clock::time_point updateTime_;

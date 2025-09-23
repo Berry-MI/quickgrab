@@ -6,9 +6,30 @@
 #include <boost/json.hpp>
 #include <chrono>
 #include <algorithm>
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <thread>
+
+namespace {
+
+class DrainCompletionGuard {
+public:
+    explicit DrainCompletionGuard(std::atomic<bool>& flag) noexcept
+        : flag_(&flag) {}
+
+    ~DrainCompletionGuard() noexcept {
+        if (flag_) {
+            flag_->store(false);
+        }
+    }
+
+private:
+    std::atomic<bool>* flag_;
+};
+
+} // namespace
 
 namespace quickgrab::service {
 
@@ -34,13 +55,31 @@ GrabService::GrabService(boost::asio::io_context& io,
     , schedulingTime_(computeSchedulingTime()) {}
 
 void GrabService::processPending() {
-    boost::asio::post(worker_, [this]() {
-        auto pending = requests_.findPending(50);
-        boost::asio::post(io_, [this, pending = std::move(pending)]() mutable {
-            for (auto& request : pending) {
-                executeRequest(std::move(request));
-            }
-        });
+    if (pendingDrainInFlight_.exchange(true)) {
+        util::log(util::LogLevel::debug,
+                  "Skipping pending drain; another drain is already in flight");
+        return;
+    }
+
+    auto guard = std::make_shared<DrainCompletionGuard>(pendingDrainInFlight_);
+
+    boost::asio::post(worker_, [this, guard]() mutable {
+        try {
+            auto pending = requests_.findPending(50);
+            boost::asio::post(io_, [this, guard, pending = std::move(pending)]() mutable {
+                try {
+                    for (auto& request : pending) {
+                        executeRequest(std::move(request));
+                    }
+                } catch (const std::exception& ex) {
+                    util::log(util::LogLevel::error,
+                              std::string{"处理待抢购请求时发生异常: "} + ex.what());
+                }
+            });
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::error,
+                      std::string{"查找待抢购请求时发生异常: "} + ex.what());
+        }
     });
 }
 

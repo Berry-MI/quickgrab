@@ -40,6 +40,7 @@ add_library(quickgrab_core
     src/proxy/ProxyPool.cpp
     src/util/HttpClient.cpp
     src/util/JsonUtil.cpp
+    src/util/WeidianParser.cpp
     src/util/Logging.cpp
     src/workflow/GrabWorkflow.cpp
 )

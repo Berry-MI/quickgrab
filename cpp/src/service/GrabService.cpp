@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <boost/asio/connect.hpp>
 
 namespace quickgrab::service {
 namespace {

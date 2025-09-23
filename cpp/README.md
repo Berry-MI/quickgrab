@@ -23,13 +23,13 @@ cmake --build build
 - src/main.cpp：启动入口，负责装配 HTTP 服务器、MySQL X DevAPI 连接池、仓储与业务服务。
 - server/：基于 Beast 的 HTTP Server、Router、RequestContext，替代 Spring MVC。
 - controller/：REST 接口层（抢购、代理、查询）。
-- service/：业务逻辑（GrabService、ProxyService、QueryService）。
+- service/：业务逻辑（GrabService、QueryService、StatisticsService）。
 - workflow/GrabWorkflow：封装抢购状态机、重试与 ReConfirm/CreateOrder 调用。
 - proxy/ProxyPool：代理池，提供粘滞分配、失败退避、快照导出。
 - repository/：MySqlConnectionPool、RequestsRepository、ResultsRepository 通过 MySQL Connector/C++ X DevAPI 读取/写入表数据。
 默认在 cpp/data/database.json 加载数据库连接（如缺失则使用 127.0.0.1:33060/grab_system）；可通过环境变量 QUICKGRAB_DB_HOST/PORT/USER/PASSWORD/NAME/POOL 覆盖。
 
-可选在 cpp/data/kdlproxy.json 配置快代理（Kuaidaili）拉取参数：secretId/signature/username/password/count/refreshMinutes，或通过环境变量 QUICKGRAB_PROXY_ENDPOINT/SECRET_ID/SIGNATURE/USERNAME/PASSWORD/BATCH/REFRESH_MINUTES 覆盖。启用后服务将按配置周期调用 `https://dps.kdlapi.com/api/getdps/` 拉取代理列表并注入代理池，业务接口仍可通过 `useProxy` 参数自由选择是否走代理。
+可选在 cpp/data/kdlproxy.json 配置快代理（Kuaidaili）拉取参数：secretId/signature/username/password/count/refreshMinutes，或通过环境变量 QUICKGRAB_PROXY_ENDPOINT/SECRET_ID/SIGNATURE/USERNAME/PASSWORD/BATCH/REFRESH_MINUTES 覆盖。启用后服务在抢购请求启用代理时即时调用 `https://dps.kdlapi.com/api/getdps/` 拉取候选 IP，测量延迟后自动挑选最快节点复用。
 | RequestsMapper.java | repository/RequestsRepository（基于 MySQL） |
 | ResultsMapper.java | repository/ResultsRepository |
 
@@ -37,7 +37,7 @@ cmake --build build
 
 ## 代理池与抢购流程
 
-- 代理池支持粘滞绑定、成功/失败反馈、隔离与快照；REST /api/proxies、/api/proxies/hydrate 暴露管理接口。
+- 代理池支持粘滞绑定、成功/失败反馈、隔离与快照，可结合 KDL 接口按需自动补充代理。
 - 抢购流程解析扩展字段（快速模式/稳定模式/自动选点），利用 steady_timer 精准等待后在工作线程池中执行 ReConfirm/CreateOrder，完成后返回到 I/O 线程向调用方响应。
 
 ## 与 Java 项目映射

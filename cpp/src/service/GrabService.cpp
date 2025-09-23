@@ -2,15 +2,102 @@
 #include "quickgrab/model/Result.hpp"
 #include "quickgrab/util/Logging.hpp"
 
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/json.hpp>
-#include <chrono>
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 
 namespace quickgrab::service {
+namespace {
+
+constexpr std::chrono::milliseconds kProxyProbeTimeout{1500};
+
+bool parseBoolValue(const boost::json::value& value) {
+    if (value.is_bool()) {
+        return value.as_bool();
+    }
+    if (value.is_int64()) {
+        return value.as_int64() != 0;
+    }
+    if (value.is_double()) {
+        return value.as_double() != 0.0;
+    }
+    if (value.is_string()) {
+        auto str = value.as_string();
+        std::string lower(str.c_str(), str.size());
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return lower == "true" || lower == "1" || lower == "yes";
+    }
+    return false;
+}
+
+bool extensionRequestsProxy(const boost::json::object& extension) {
+    static constexpr std::array<std::string_view, 4> keys{"useProxy", "use_proxy", "proxyEnabled", "proxy"};
+    for (auto key : keys) {
+        if (auto it = extension.if_contains(key.data())) {
+            if (parseBoolValue(*it)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::chrono::milliseconds measureProxyLatency(const proxy::ProxyEndpoint& endpoint) {
+    try {
+        boost::asio::io_context io;
+        boost::asio::ip::tcp::resolver resolver(io);
+        boost::asio::ip::tcp::socket socket(io);
+        boost::asio::steady_timer timer(io);
+        std::chrono::milliseconds latency = std::chrono::milliseconds::max();
+        bool connected = false;
+
+        auto start = std::chrono::steady_clock::now();
+        auto endpoints = resolver.resolve(endpoint.host, std::to_string(endpoint.port));
+
+        boost::asio::async_connect(socket, endpoints,
+                                   [&](const boost::system::error_code& ec,
+                                       const boost::asio::ip::tcp::endpoint&) {
+                                       if (!ec) {
+                                           connected = true;
+                                           latency = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - start);
+                                           timer.cancel();
+                                       }
+                                   });
+
+        timer.expires_after(kProxyProbeTimeout);
+        timer.async_wait([&](const boost::system::error_code& ec) {
+            if (!ec) {
+                socket.cancel();
+            }
+        });
+
+        io.run();
+
+        if (connected) {
+            boost::system::error_code ec;
+            socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+            socket.close(ec);
+            return latency;
+        }
+    } catch (const std::exception&) {
+    }
+    return kProxyProbeTimeout * 2;
+}
+
+} // namespace
 
 GrabService::GrabService(boost::asio::io_context& io,
                          boost::asio::thread_pool& worker,
@@ -32,6 +119,57 @@ GrabService::GrabService(boost::asio::io_context& io,
     , updateTime_(std::chrono::system_clock::now())
     , prestartTime_(std::chrono::system_clock::now())
     , schedulingTime_(computeSchedulingTime()) {}
+
+void GrabService::setProxyConfig(proxy::KdlProxyConfig config) {
+    std::lock_guard<std::mutex> lock(proxyMutex_);
+    proxyConfig_ = std::move(config);
+}
+
+bool GrabService::requestWantsProxy(const boost::json::object& extension) const {
+    return extensionRequestsProxy(extension);
+}
+
+std::optional<proxy::ProxyEndpoint> GrabService::fetchProxyForRequest(const model::Request& request) {
+    std::optional<proxy::KdlProxyConfig> config;
+    {
+        std::lock_guard<std::mutex> lock(proxyMutex_);
+        config = proxyConfig_;
+    }
+    if (!config) {
+        return std::nullopt;
+    }
+
+    try {
+        auto proxies = proxy::fetchKdlProxies(*config, httpClient_);
+        if (proxies.empty()) {
+            return std::nullopt;
+        }
+
+        for (auto& endpoint : proxies) {
+            endpoint.latency = measureProxyLatency(endpoint);
+        }
+
+        std::stable_sort(proxies.begin(), proxies.end(), [](const proxy::ProxyEndpoint& lhs,
+                                                            const proxy::ProxyEndpoint& rhs) {
+            if (lhs.latency == rhs.latency) {
+                return lhs.host < rhs.host;
+            }
+            return lhs.latency < rhs.latency;
+        });
+
+        auto best = proxies.front();
+        util::log(util::LogLevel::info,
+                  "请求 id=" + std::to_string(request.id) +
+                      " 分配代理 " + best.host + ':' + std::to_string(best.port) +
+                      " (" + std::to_string(best.latency.count()) + "ms)");
+        return best;
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn,
+                  std::string{"请求 id="} + std::to_string(request.id) +
+                      " 拉取代理失败: " + ex.what());
+    }
+    return std::nullopt;
+}
 
 void GrabService::processPending() {
     boost::asio::post(worker_, [this]() {
@@ -88,6 +226,32 @@ void GrabService::executeGrab(model::Request request) {
     if (request.extension.is_object()) {
         extension = request.extension.as_object();
     }
+
+    if (requestWantsProxy(extension)) {
+        auto proxy = fetchProxyForRequest(request);
+        if (proxy) {
+            extension["__proxyHost"] = proxy->host;
+            extension["__proxyPort"] = static_cast<std::int64_t>(proxy->port);
+            extension["__proxyLatency"] = static_cast<std::int64_t>(proxy->latency.count());
+            extension["__proxySource"] = "kdl";
+            extension["__proxyAssigned"] = true;
+            extension["useProxy"] = true;
+            if (!proxy->username.empty()) {
+                extension["__proxyUsername"] = proxy->username;
+            }
+            if (!proxy->password.empty()) {
+                extension["__proxyPassword"] = proxy->password;
+            }
+        } else {
+            extension["__proxyAssigned"] = false;
+            extension["__proxyError"] = "fetch_failed";
+            extension["useProxy"] = false;
+            extension["use_proxy"] = false;
+            extension["proxy"] = false;
+            extension["proxyEnabled"] = false;
+        }
+    }
+
     extension["__adjustedFactor"] = adjustedFactor_.load();
     extension["__processingTime"] = processingTime_;
     extension["__schedulingTime"] = schedulingTime_;

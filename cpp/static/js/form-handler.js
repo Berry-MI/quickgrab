@@ -2,8 +2,6 @@ import {setItemInfo} from "./api-handler.js";
 import {setButtonLoading, showAlert, throttle} from "./util.js";
 import {formatJSON, validateIdNumber, validateJSON} from "./form-validation.js";
 
-let cachedProxyAffinity = null;
-
 document.addEventListener('DOMContentLoaded', function () {
     toggleFields();
     toggleAdvancedFields();
@@ -11,7 +9,6 @@ document.addEventListener('DOMContentLoaded', function () {
     toggleShippingFeeField();
     setupValidation();
     setupAutoDelay();
-    setupProxyOptions();
 });
 
 function setupValidation() {
@@ -48,40 +45,6 @@ function setupValidation() {
             this.classList.remove('invalid');
         }
     });
-}
-
-function setupProxyOptions() {
-    const useProxySwitch = document.getElementById('useIpProxy');
-    const proxySettings = document.getElementById('proxySettings');
-    const affinityInput = document.getElementById('proxyAffinity');
-
-    const updateVisibility = () => {
-        if (useProxySwitch.checked) {
-            proxySettings.style.display = 'flex';
-            if (!affinityInput.value.trim()) {
-                if (!cachedProxyAffinity) {
-                    cachedProxyAffinity = generateProxyAffinity();
-                }
-                affinityInput.value = cachedProxyAffinity;
-            }
-        } else {
-            proxySettings.style.display = 'none';
-            cachedProxyAffinity = null;
-            affinityInput.value = '';
-        }
-    };
-
-    useProxySwitch.addEventListener('change', updateVisibility);
-    updateVisibility();
-}
-
-function generateProxyAffinity() {
-    if (window.crypto && window.crypto.randomUUID) {
-        return `proxy-${window.crypto.randomUUID()}`;
-    }
-    const randomPart = Math.random().toString(36).slice(2, 8);
-    const timePart = Date.now().toString(36);
-    return `proxy-${timePart}-${randomPart}`;
 }
 
 document.getElementById('type').addEventListener('change', toggleFields);
@@ -230,8 +193,6 @@ export function getInputValue() {
     const shippingFee = document.getElementById('shippingFee').value;
     const quickMode = document.getElementById('quickMode').checked;
     const useIpProxy = document.getElementById('useIpProxy').checked;
-    const affinityInput = document.getElementById('proxyAffinity');
-    let proxyAffinity = affinityInput.value.trim();
     let link, cookies, orderTemplate, idNumber, keyword, quantity = 1, extension;
 
     link = document.getElementById('link').value;
@@ -266,22 +227,6 @@ export function getInputValue() {
         quickMode,
         useProxy: useIpProxy
     };
-
-    if (useIpProxy) {
-        if (!proxyAffinity) {
-            if (!cachedProxyAffinity) {
-                cachedProxyAffinity = generateProxyAffinity();
-            }
-            proxyAffinity = cachedProxyAffinity;
-            affinityInput.value = proxyAffinity;
-        } else {
-            cachedProxyAffinity = proxyAffinity;
-        }
-        extension.proxyAffinity = proxyAffinity;
-        extension.proxyStrategy = 'fastest_latency';
-    } else {
-        cachedProxyAffinity = null;
-    }
 
     extension = JSON.stringify(extension);
 

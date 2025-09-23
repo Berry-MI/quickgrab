@@ -160,7 +160,8 @@ HttpClient::HttpClient(boost::asio::io_context& io, proxy::ProxyPool& pool)
 HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                                            const std::string& affinityKey,
                                            std::chrono::seconds timeout,
-                                           bool useProxy)
+                                           bool useProxy,
+                                           const proxy::ProxyEndpoint* overrideProxy)
 {
     request.version(kHttpVersion);
     if (request.find(boost::beast::http::field::host) == request.end()) {

@@ -1,11 +1,15 @@
 #include "quickgrab/workflow/GrabWorkflow.hpp"
+#include "quickgrab/util/CommonUtil.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
+#include "quickgrab/util/WeidianParser.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <optional>
 #include <random>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -19,6 +23,8 @@ namespace {
 constexpr int kMaxRetries = 3;
 constexpr char kUserAgent[] = "Android/9 WDAPP(WDBuyer/7.6.2) Thor/2.3.25";
 constexpr char kReferer[] = "https://android.weidian.com/";
+constexpr char kDesktopUA[] =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
 
 constexpr std::array<std::string_view, 11> kRetryKeywords{
     "请稍后再试",
@@ -92,6 +98,64 @@ bool tryGetBool(const boost::json::object& obj, const char* key, bool def) {
         return it->as_bool();
     }
     return def;
+}
+
+bool parseBool(const boost::json::value& value) {
+    if (value.is_bool()) {
+        return value.as_bool();
+    }
+    if (value.is_int64()) {
+        return value.as_int64() != 0;
+    }
+    if (value.is_string()) {
+        auto str = value.as_string();
+        std::string lower(str.c_str(), str.size());
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return lower == "true" || lower == "1";
+    }
+    return false;
+}
+
+std::optional<std::string> parseString(const boost::json::value& value) {
+    if (value.is_string()) {
+        auto str = value.as_string();
+        return std::string(str.c_str(), str.size());
+    }
+    if (value.is_int64()) {
+        return std::to_string(value.as_int64());
+    }
+    if (value.is_double()) {
+        return std::to_string(value.as_double());
+    }
+    return std::nullopt;
+}
+
+bool shouldUseProxy(const boost::json::object& extension) {
+    static constexpr std::array<std::string_view, 4> keys{"useProxy", "use_proxy", "proxyEnabled", "proxy"};
+    for (auto key : keys) {
+        if (auto it = extension.if_contains(key.data())) {
+            if (parseBool(*it)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::string resolveAffinity(const boost::json::object& extension) {
+    static constexpr std::array<std::string_view, 4> keys{"proxyAffinity", "affinity", "proxyKey", "proxy_key"};
+    for (auto key : keys) {
+        if (auto it = extension.if_contains(key.data())) {
+            if (auto value = parseString(*it)) {
+                if (!value->empty()) {
+                    return *value;
+                }
+            }
+        }
+    }
+    return {};
 }
 
 std::string toQuery(const std::string& payload) {
@@ -262,8 +326,8 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
 
 void GrabWorkflow::scheduleExecution(GrabContext ctx,
                                      std::function<void(const GrabResult&)> onFinished) {
-    auto payloadValue = ctx.request.orderParameters;
-    std::cout << "payload = " << boost::json::serialize(payloadValue) << std::endl;
+    refreshOrderParameters(ctx);
+    //std::cout << "payload = " << boost::json::serialize(payloadValue) << std::endl;
     boost::json::object payload;
     bool hasPayload = false;
     if (ctx.request.orderParameters.is_object()) {
@@ -331,6 +395,70 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
             });
         });
     });
+}
+
+void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
+    if (ctx.quickMode) {
+        util::log(util::LogLevel::info,
+                  "请求ID=" + std::to_string(ctx.request.id) + " 使用快速模式，跳过重新生成订单参数");
+        return;
+    }
+
+    auto dataObj = fetchAddOrderData(ctx);
+    if (!dataObj) {
+        util::log(util::LogLevel::warn,
+                  "请求ID=" + std::to_string(ctx.request.id) + " 无法获取下单数据，将尝试使用已有参数");
+        return;
+    }
+
+    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *dataObj, true);
+    if (!orderParams) {
+        util::log(util::LogLevel::warn,
+                  "请求ID=" + std::to_string(ctx.request.id) + " 解析下单数据失败，将尝试使用已有参数");
+        return;
+    }
+
+    ctx.request.orderParameters = *orderParams;
+    ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(*orderParams);
+    util::log(util::LogLevel::info,
+              "请求ID=" + std::to_string(ctx.request.id) + " 重新生成订单参数成功");
+}
+
+std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabContext& ctx) const {
+    std::vector<util::HttpClient::Header> headers{
+        {"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+        {"Cookie", ctx.request.cookies},
+        {"Referer", "https://weidian.com/"},
+        {"User-Agent", kDesktopUA}};
+
+    bool useProxy = shouldUseProxy(ctx.extension);
+    std::string affinity = resolveAffinity(ctx.extension);
+    if (useProxy && affinity.empty()) {
+        useProxy = false;
+    }
+
+    try {
+        auto response = httpClient_.fetch("GET",
+                                          ctx.request.link,
+                                          headers,
+                                          "",
+                                          affinity,
+                                          std::chrono::seconds{30},
+                                          true,
+                                          5,
+                                          nullptr,
+                                          useProxy);
+        auto data = util::extractDataObject(response.body());
+        if (!data || !data->is_object()) {
+            return std::nullopt;
+        }
+        return data->as_object();
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn,
+                  std::string{"请求ID="} + std::to_string(ctx.request.id) +
+                      " 获取下单页面失败: " + ex.what());
+        return std::nullopt;
+    }
 }
 
 boost::beast::http::request<boost::beast::http::string_body>

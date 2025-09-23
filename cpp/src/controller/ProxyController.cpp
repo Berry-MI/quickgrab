@@ -1,6 +1,7 @@
 #include "quickgrab/controller/ProxyController.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
+#include "quickgrab/util/WeidianParser.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
@@ -9,7 +10,6 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
-#include <cstring>
 #include <iomanip>
 #include <initializer_list>
 #include <iterator>
@@ -223,67 +223,6 @@ std::optional<MultipartFilePart> extractMultipartFile(const std::string& body,
         return part;
     }
     return std::nullopt;
-}
-
-std::string decodeHtmlAttribute(const std::string& input) {
-    std::string output;
-    output.reserve(input.size());
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        if (input[i] == '&') {
-            auto semi = input.find(';', i + 1);
-            if (semi == std::string::npos) {
-                break;
-            }
-            auto entity = input.substr(i + 1, semi - i - 1);
-            if (entity == "quot") {
-                output.push_back('"');
-            } else if (entity == "amp") {
-                output.push_back('&');
-            } else if (entity == "lt") {
-                output.push_back('<');
-            } else if (entity == "gt") {
-                output.push_back('>');
-            } else if (!entity.empty() && entity[0] == '#') {
-                char ch = '?';
-                if (entity.size() > 1 && (entity[1] == 'x' || entity[1] == 'X')) {
-                    ch = static_cast<char>(std::strtol(entity.c_str() + 2, nullptr, 16));
-                } else {
-                    ch = static_cast<char>(std::strtol(entity.c_str() + 1, nullptr, 10));
-                }
-                output.push_back(ch);
-            } else {
-                output.append("&").append(entity).append(";");
-            }
-            i = semi;
-        } else {
-            output.push_back(input[i]);
-        }
-    }
-    return output;
-}
-
-std::optional<boost::json::value> extractDataObject(const std::string& html) {
-    auto markerPos = html.find("id=\"__rocker-render-inject__\"");
-    if (markerPos == std::string::npos) {
-        return std::nullopt;
-    }
-    auto attrPos = html.find("data-obj=\"", markerPos);
-    if (attrPos == std::string::npos) {
-        return std::nullopt;
-    }
-    attrPos += std::strlen("data-obj=\"");
-    auto end = html.find('"', attrPos);
-    if (end == std::string::npos) {
-        return std::nullopt;
-    }
-    std::string raw = html.substr(attrPos, end - attrPos);
-    std::string decoded = decodeHtmlAttribute(raw);
-    try {
-        return boost::json::parse(decoded);
-    } catch (const std::exception& ex) {
-        util::log(util::LogLevel::warn, std::string{"Failed to parse data-obj JSON: "} + ex.what());
-        return std::nullopt;
-    }
 }
 
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,
@@ -860,7 +799,7 @@ void ProxyController::handleGetAddOrderData(quickgrab::server::RequestContext& c
                                           5,
                                           nullptr,
                                           useProxy);
-        auto dataObject = extractDataObject(response.body());
+        auto dataObject = util::extractDataObject(response.body());
         if (!dataObject) {
             sendJsonResponse(ctx, boost::beast::http::status::bad_request, "{\"error\":\"failed to extract data obj\"}");
             return;

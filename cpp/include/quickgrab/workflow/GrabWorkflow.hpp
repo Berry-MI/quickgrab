@@ -12,6 +12,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,9 @@ private:
     GrabResult reConfirmOrder(const GrabContext& ctx, const boost::json::object& payload);
     void scheduleExecution(GrabContext ctx,
                            std::function<void(const GrabResult&)> onFinished);
+
+    void refreshOrderParameters(GrabContext& ctx);
+    std::optional<boost::json::object> fetchAddOrderData(const GrabContext& ctx) const;
 
     boost::beast::http::request<boost::beast::http::string_body>
     buildPost(const std::string& url,

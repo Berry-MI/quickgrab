@@ -213,6 +213,11 @@ model::Request RequestsRepository::mapRow(mysqlx::Row row) {
     request.type = next().get<int>();
     request.status = next().get<int>();
     value = next();
+    if (!value.isNull()) {
+        request.orderParametersRaw = valueToString(value);
+    } else {
+        request.orderParametersRaw.clear();
+    }
     request.orderParameters = parseJsonColumn(value, "order_parameters");
     value = next();
     request.actualEarnings = readDouble(value);
@@ -361,6 +366,13 @@ int RequestsRepository::insert(const model::Request& request) {
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("requests");
+        mysqlx::Value orderParamValue = makeNullValue();
+        if (!request.orderParametersRaw.empty()) {
+            orderParamValue = mysqlx::Value(request.orderParametersRaw);
+        } else if (request.orderParameters.is_object() || request.orderParameters.is_array()) {
+            orderParamValue = mysqlx::Value(quickgrab::util::stringifyJson(request.orderParameters));
+        }
+
         auto result = table
                           .insert("device_id",
                                   "buyer_id",
@@ -402,7 +414,7 @@ int RequestsRepository::insert(const model::Request& request) {
                                   request.frequency,
                                   request.type,
                                   request.status,
-                                  jsonOrNull(request.orderParameters),
+                                  orderParamValue,
                                   request.actualEarnings,
                                   request.estimatedEarnings,
                                   jsonOrNull(request.extension))

@@ -265,10 +265,30 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
     auto payloadValue = ctx.request.orderParameters;
     std::cout << "payload = " << boost::json::serialize(payloadValue) << std::endl;
     boost::json::object payload;
-    if (payloadValue.is_object()) {
-        payload = payloadValue.as_object();
-    } else {
+    bool hasPayload = false;
+    if (ctx.request.orderParameters.is_object()) {
+        payload = ctx.request.orderParameters.as_object();
+        hasPayload = true;
+    } else if (!ctx.request.orderParametersRaw.empty()) {
+        try {
+            auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
+            if (parsed.is_object()) {
+                payload = parsed.as_object();
+                hasPayload = true;
+            } else {
+                util::log(util::LogLevel::warn,
+                          "请求 id=" + std::to_string(ctx.request.id) + " 的订单参数不是 JSON 对象，使用默认模板");
+            }
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      "解析订单参数失败 id=" + std::to_string(ctx.request.id) + " error=" + ex.what());
+        }
+    }
+    if (!hasPayload) {
         payload = buildBasePayload(ctx);
+    } else {
+        ctx.request.orderParameters = payload;
+        ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
     }
     std::cout << "payload = " << boost::json::serialize(payload) << std::endl;
     auto delay = computeDelay(ctx);
@@ -340,6 +360,15 @@ boost::json::object GrabWorkflow::buildBasePayload(const GrabContext& ctx) const
     boost::json::object payload;
     if (ctx.request.orderParameters.is_object()) {
         return ctx.request.orderParameters.as_object();
+    }
+    if (!ctx.request.orderParametersRaw.empty()) {
+        try {
+            auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
+            if (parsed.is_object()) {
+                return parsed.as_object();
+            }
+        } catch (const std::exception&) {
+        }
     }
     payload["buyer_id"] = ctx.request.buyerId;
     payload["device_id"] = ctx.request.deviceId;

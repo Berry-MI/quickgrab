@@ -121,7 +121,14 @@ boost::json::object requestToJson(const model::Request& request) {
     obj["frequency"] = request.frequency;
     obj["type"] = request.type;
     obj["status"] = request.status;
-    obj["orderParameters"] = request.orderParameters;
+    if (!request.orderParametersRaw.empty()) {
+        obj["orderParameters"] = request.orderParametersRaw;
+    } else {
+        obj["orderParameters"] = request.orderParameters;
+    }
+    if (!request.orderParametersRaw.empty()) {
+        obj["orderParametersRaw"] = request.orderParametersRaw;
+    }
     obj["actualEarnings"] = request.actualEarnings;
     obj["estimatedEarnings"] = request.estimatedEarnings;
     obj["extension"] = request.extension;

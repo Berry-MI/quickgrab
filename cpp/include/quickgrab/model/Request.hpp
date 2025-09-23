@@ -27,6 +27,7 @@ struct Request {
     int frequency{};
     int type{};
     int status{};
+    std::string orderParametersRaw;
     boost::json::value orderParameters;
     double actualEarnings{};
     double estimatedEarnings{};

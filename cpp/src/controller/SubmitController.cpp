@@ -212,6 +212,13 @@ model::Request buildRequestModel(const boost::json::object& payload) {
     request.frequency = readInt(payload, "frequency");
     request.type = readInt(payload, "type");
     request.status = 0;
+    if (auto it = payload.if_contains("orderParameters")) {
+        if (it->is_string()) {
+            request.orderParametersRaw = std::string(it->as_string().c_str());
+        } else if (it->is_object() || it->is_array()) {
+            request.orderParametersRaw = quickgrab::util::stringifyJson(*it);
+        }
+    }
     request.orderParameters = readJson(payload, "orderParameters");
     request.actualEarnings = readDouble(payload, "actualEarnings");
     request.estimatedEarnings = readDouble(payload, "estimatedEarnings");

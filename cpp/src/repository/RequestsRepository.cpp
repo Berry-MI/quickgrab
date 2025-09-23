@@ -374,51 +374,56 @@ int RequestsRepository::insert(const model::Request& request) {
         }
 
         auto result = table
-                          .insert("device_id",
-                                  "buyer_id",
-                                  "thread_id",
-                                  "link",
-                                  "cookies",
-                                  "order_info",
-                                  "user_info",
-                                  "order_template",
-                                  "message",
-                                  "id_number",
-                                  "keyword",
-                                  "start_time",
-                                  "end_time",
-                                  "quantity",
-                                  "delay",
-                                  "frequency",
-                                  "type",
-                                  "status",
-                                  "order_parameters",
-                                  "actual_earnings",
-                                  "estimated_earnings",
-                                  "extension")
-                          .values(request.deviceId,
-                                  request.buyerId,
-                                  request.threadId,
-                                  request.link,
-                                  request.cookies,
-                                  jsonOrNull(request.orderInfo),
-                                  jsonOrNull(request.userInfo),
-                                  jsonOrNull(request.orderTemplate),
-                                  request.message,
-                                  request.idNumber,
-                                  request.keyword,
-                                  toTimestampValue(request.startTime),
-                                  toTimestampValue(request.endTime),
-                                  request.quantity,
-                                  request.delay,
-                                  request.frequency,
-                                  request.type,
-                                  request.status,
-                                  orderParamValue,
-                                  request.actualEarnings,
-                                  request.estimatedEarnings,
-                                  jsonOrNull(request.extension))
-                          .execute();
+            .insert(
+                "device_id",
+                "buyer_id",
+                "thread_id",
+                "link",
+                "cookies",
+                "order_info",
+                "user_info",
+                "order_template",
+                "message",
+                "id_number",
+                "keyword",
+                "start_time",
+                "end_time",
+                "quantity",
+                "delay",
+                "frequency",
+                "type",
+                "status",
+                "order_parameters",
+                "actual_earnings",
+                "estimated_earnings",
+                "extension"
+            )
+            .values(
+                request.deviceId,                          // device_id
+                request.buyerId,                           // buyer_id
+                request.threadId,                          // thread_id
+                request.link,                              // link
+                request.cookies,                           // cookies
+                jsonOrNull(request.orderInfo),             // order_info
+                jsonOrNull(request.userInfo),              // user_info
+                jsonOrNull(request.orderTemplate),         // order_template
+                request.message,                           // message
+                request.idNumber,                          // id_number
+                request.keyword,                           // keyword
+                toTimestampValue(request.startTime),       // start_time
+                toTimestampValue(request.endTime),         // end_time
+                request.quantity,                          // quantity
+                request.delay,                             // delay
+                request.frequency,                         // frequency
+                request.type,                              // type
+                request.status,                            // status
+                orderParamValue,                           // order_parameters
+                request.actualEarnings,                    // actual_earnings
+                request.estimatedEarnings,                 // estimated_earnings
+                jsonOrNull(request.extension)              // extension
+            )
+            .execute();
+
         return static_cast<int>(result.getAutoIncrementValue());
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Insert request failed: "} + err.what());

@@ -212,7 +212,7 @@ int main(int /*argc*/, char** /*argv*/) {
         proxyPool.hydrate(std::move(initialProxies));
     }
 
-    if (auto kdlConfig = proxy::loadKdlProxyConfig("data/kdlproxy.json")) {
+    if (auto kdlConfig = proxy::loadKdlProxyConfig("../../data/kdlproxy.json")) {
         util::log(util::LogLevel::info,
                   "启用 KDL 代理自动分配，接口=" + kdlConfig->endpoint +
                       "，每次拉取 " + std::to_string(kdlConfig->batchSize) + " 个候选");

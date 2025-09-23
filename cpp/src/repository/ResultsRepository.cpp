@@ -372,7 +372,7 @@ void ResultsRepository::insertResult(const model::Result& result) {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("results");
         auto responsePayload = result.responseMessage.is_null() ? result.payload : result.responseMessage;
-        table.insert("request_id",
+        table.insert("id",
                     "device_id",
                     "buyer_id",
                     "thread_id",
@@ -394,8 +394,8 @@ void ResultsRepository::insertResult(const model::Result& result) {
                     "response_message",
                     "actual_earnings",
                     "estimated_earnings",
-                    "extension",
-                    "created_at")
+                    "extension"
+                    )
             .values(result.requestId,
                     result.deviceId,
                     result.buyerId,
@@ -418,8 +418,9 @@ void ResultsRepository::insertResult(const model::Result& result) {
                     jsonOrNull(responsePayload),
                     result.actualEarnings,
                     result.estimatedEarnings,
-                    jsonOrNull(result.extension),
-                    toTimestampValue(result.createdAt))
+                    jsonOrNull(result.extension)
+                    //toTimestampValue(result.createdAt)
+            )
             .execute();
     } catch (const mysqlx::Error& err) {
         util::log(util::LogLevel::error, std::string{"Insert result failed: "} + err.what());

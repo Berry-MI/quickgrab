@@ -173,32 +173,40 @@ boost::json::object parseObjectValue(const boost::json::value& value) {
     return {};
 }
 
-double parseExpressFeeFromDesc(const std::string& desc, double shopPrice, double currentFee) {
+double parseExpressFeeFromDesc(const std::string& desc,
+    double shopPrice,
+    double currentFee) {
     bool freeShipping = false;
     std::regex freePattern("满(\\d+(?:\\.\\d+)?)元包邮");
     std::smatch match;
-    if (std::regex_search(desc, match)) {
+
+    if (std::regex_search(desc, match, freePattern)) {
         try {
             double threshold = std::stod(match[1].str());
             if (shopPrice >= threshold) {
                 freeShipping = true;
                 currentFee = 0.0;
             }
-        } catch (const std::exception&) {
+        }
+        catch (const std::exception&) {
+            // 忽略解析失败
         }
     }
 
     if (!freeShipping) {
         std::regex feePattern("(\\d+(?:\\.\\d+)?)元起?");
-        if (std::regex_search(desc, match)) {
+        if (std::regex_search(desc, match, feePattern)) {   
             try {
                 currentFee = std::stod(match[1].str());
-            } catch (const std::exception&) {
+            }
+            catch (const std::exception&) {
+                // 忽略解析失败
             }
         }
     }
     return currentFee;
 }
+
 
 std::string readObjectString(const boost::json::object& obj, const char* key) {
     if (auto it = obj.if_contains(key)) {

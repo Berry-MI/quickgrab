@@ -405,13 +405,25 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
     }
 
     auto dataObj = fetchAddOrderData(ctx);
+	std::cout << "dataObj = " << (dataObj ? boost::json::serialize(*dataObj) : "null") << std::endl;
     if (!dataObj) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 无法获取下单数据，将尝试使用已有参数");
         return;
     }
 
-    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *dataObj, true);
+    const auto& root = *dataObj;
+
+    // 下钻到 order.result
+    const boost::json::object* result = &root;
+    if (auto* order = root.if_contains("order"); order && order->is_object()) {
+        const auto& orderObj = order->as_object();
+        if (auto* res = orderObj.if_contains("result"); res && res->is_object()) {
+            result = &res->as_object();
+        }
+    }
+
+    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *result, true);
     if (!orderParams) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 解析下单数据失败，将尝试使用已有参数");

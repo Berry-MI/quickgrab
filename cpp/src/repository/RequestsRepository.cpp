@@ -266,7 +266,7 @@ void RequestsRepository::updateStatus(int requestId, int status) {
         mysqlx::Table table = schema.getTable("requests");
         table.update()
             .set("status", status)
-            .set("updated_at", formatTimestamp(std::chrono::system_clock::now()))
+            //.set("updated_at", formatTimestamp(std::chrono::system_clock::now()))
             .where("id = :id")
             .bind("id", requestId)
             .execute();

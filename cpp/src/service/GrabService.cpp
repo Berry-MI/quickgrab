@@ -7,15 +7,36 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <boost/asio/connect.hpp>
+
+namespace {
+
+class DrainCompletionGuard {
+public:
+    explicit DrainCompletionGuard(std::atomic<bool>& flag) noexcept
+        : flag_(&flag) {}
+
+    ~DrainCompletionGuard() noexcept {
+        if (flag_) {
+            flag_->store(false);
+        }
+    }
+
+private:
+    std::atomic<bool>* flag_;
+};
+
+} // namespace
 
 namespace quickgrab::service {
 namespace {
@@ -216,23 +237,31 @@ std::optional<proxy::ProxyEndpoint> GrabService::fetchProxyForRequest(const mode
 }
 
 void GrabService::processPending() {
-    boost::asio::post(worker_, [this]() {
-        auto pending = requests_.findPending(50);
-        boost::asio::post(io_, [this, pending = std::move(pending)]() mutable {
-            for (const auto& request : pending) {
-                int threadCount = 1;
-                if (request.extension.is_object()) {
-                    const auto& ext = request.extension.as_object();
-                    const int requested = readRequestedThreadCount(ext);
-                    const bool allowMultiple = extensionRequestsProxy(ext);
-                    threadCount = clampThreadCount(requested, allowMultiple);
-                }
+    if (pendingDrainInFlight_.exchange(true)) {
+        util::log(util::LogLevel::debug,
+                  "Skipping pending drain; another drain is already in flight");
+        return;
+    }
 
-                for (int i = 0; i < threadCount; ++i) {
-                    executeRequest(request);
+    auto guard = std::make_shared<DrainCompletionGuard>(pendingDrainInFlight_);
+
+    boost::asio::post(worker_, [this, guard]() mutable {
+        try {
+            auto pending = requests_.findPending(50);
+            boost::asio::post(io_, [this, guard, pending = std::move(pending)]() mutable {
+                try {
+                    for (auto& request : pending) {
+                        executeRequest(std::move(request));
+                    }
+                } catch (const std::exception& ex) {
+                    util::log(util::LogLevel::error,
+                              std::string{"处理待抢购请求时发生异常: "} + ex.what());
                 }
-            }
-        });
+            });
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::error,
+                      std::string{"查找待抢购请求时发生异常: "} + ex.what());
+        }
     });
 }
 

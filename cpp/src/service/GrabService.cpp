@@ -20,6 +20,7 @@ namespace quickgrab::service {
 namespace {
 
 constexpr std::chrono::milliseconds kProxyProbeTimeout{1500};
+constexpr int kMaxProxyThreads{8};
 
 bool parseBoolValue(const boost::json::value& value) {
     if (value.is_bool()) {
@@ -52,6 +53,48 @@ bool extensionRequestsProxy(const boost::json::object& extension) {
         }
     }
     return false;
+}
+
+int parseThreadCountValue(const boost::json::value& value) {
+    if (value.is_int64()) {
+        return static_cast<int>(value.as_int64());
+    }
+    if (value.is_double()) {
+        return static_cast<int>(value.as_double());
+    }
+    if (value.is_string()) {
+        try {
+            return std::stoi(std::string(value.as_string().c_str()));
+        } catch (const std::exception&) {
+        }
+    }
+    return 0;
+}
+
+int readRequestedThreadCount(const boost::json::object& extension) {
+    static constexpr std::array<std::string_view, 4> keys{"proxyThreadCount", "proxy_threads", "threadCount", "threads"};
+    for (auto key : keys) {
+        if (auto it = extension.if_contains(key.data())) {
+            int parsed = parseThreadCountValue(*it);
+            if (parsed > 0) {
+                return parsed;
+            }
+        }
+    }
+    return 1;
+}
+
+int clampThreadCount(int requested, bool allowMultiple) {
+    if (!allowMultiple) {
+        return 1;
+    }
+    if (requested < 1) {
+        requested = 1;
+    }
+    if (requested > kMaxProxyThreads) {
+        requested = kMaxProxyThreads;
+    }
+    return requested;
 }
 
 std::chrono::milliseconds measureProxyLatency(const proxy::ProxyEndpoint& endpoint) {
@@ -175,8 +218,18 @@ void GrabService::processPending() {
     boost::asio::post(worker_, [this]() {
         auto pending = requests_.findPending(50);
         boost::asio::post(io_, [this, pending = std::move(pending)]() mutable {
-            for (auto& request : pending) {
-                executeRequest(std::move(request));
+            for (const auto& request : pending) {
+                int threadCount = 1;
+                if (request.extension.is_object()) {
+                    const auto& ext = request.extension.as_object();
+                    const int requested = readRequestedThreadCount(ext);
+                    const bool allowMultiple = extensionRequestsProxy(ext);
+                    threadCount = clampThreadCount(requested, allowMultiple);
+                }
+
+                for (int i = 0; i < threadCount; ++i) {
+                    executeRequest(request);
+                }
             }
         });
     });
@@ -227,6 +280,8 @@ void GrabService::executeGrab(model::Request request) {
         extension = request.extension.as_object();
     }
 
+    const int requestedThreads = readRequestedThreadCount(extension);
+
     if (requestWantsProxy(extension)) {
         auto proxy = fetchProxyForRequest(request);
         if (proxy) {
@@ -251,6 +306,9 @@ void GrabService::executeGrab(model::Request request) {
             extension["proxyEnabled"] = false;
         }
     }
+
+    const bool finalProxyState = requestWantsProxy(extension);
+    extension["proxyThreadCount"] = clampThreadCount(requestedThreads, finalProxyState);
 
     extension["__adjustedFactor"] = adjustedFactor_.load();
     extension["__processingTime"] = processingTime_;

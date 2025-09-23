@@ -2,6 +2,8 @@ import {setItemInfo} from "./api-handler.js";
 import {setButtonLoading, showAlert, throttle} from "./util.js";
 import {formatJSON, validateIdNumber, validateJSON} from "./form-validation.js";
 
+const MAX_PROXY_THREADS = 8;
+
 document.addEventListener('DOMContentLoaded', function () {
     toggleFields();
     toggleAdvancedFields();
@@ -9,6 +11,7 @@ document.addEventListener('DOMContentLoaded', function () {
     toggleShippingFeeField();
     setupValidation();
     setupAutoDelay();
+    setupProxyThreadControl();
 });
 
 function setupValidation() {
@@ -193,6 +196,7 @@ export function getInputValue() {
     const shippingFee = document.getElementById('shippingFee').value;
     const quickMode = document.getElementById('quickMode').checked;
     const useIpProxy = document.getElementById('useIpProxy').checked;
+    const proxyThreadCount = sanitizeProxyThreadCount(useIpProxy);
     let link, cookies, orderTemplate, idNumber, keyword, quantity = 1, extension;
 
     link = document.getElementById('link').value;
@@ -225,7 +229,8 @@ export function getInputValue() {
         manualShipping,
         shippingFee: parseFloat(shippingFee),
         quickMode,
-        useProxy: useIpProxy
+        useProxy: useIpProxy,
+        proxyThreadCount
     };
 
     extension = JSON.stringify(extension);
@@ -340,4 +345,49 @@ function setupAutoDelay() {
             delayInput.value = lastDelay; // 恢复上一次的值
         }
     });
+}
+
+function setupProxyThreadControl() {
+    const useProxySwitch = document.getElementById('useIpProxy');
+    const group = document.getElementById('proxyThreadGroup');
+    const input = document.getElementById('proxyThreadCount');
+
+    if (!useProxySwitch || !group || !input) {
+        return;
+    }
+
+    const updateVisibility = () => {
+        const enabled = useProxySwitch.checked;
+        group.style.display = enabled ? 'flex' : 'none';
+        input.disabled = !enabled;
+        sanitizeProxyThreadCount(enabled);
+    };
+
+    useProxySwitch.addEventListener('change', updateVisibility);
+    input.addEventListener('input', () => sanitizeProxyThreadCount(useProxySwitch.checked));
+    input.addEventListener('blur', () => sanitizeProxyThreadCount(useProxySwitch.checked));
+
+    updateVisibility();
+}
+
+function sanitizeProxyThreadCount(allowMultiple) {
+    const input = document.getElementById('proxyThreadCount');
+    if (!input) {
+        return 1;
+    }
+
+    let value = parseInt(input.value, 10);
+    if (Number.isNaN(value) || value < 1) {
+        value = 1;
+    }
+    if (value > MAX_PROXY_THREADS) {
+        value = MAX_PROXY_THREADS;
+    }
+
+    if (!allowMultiple) {
+        value = 1;
+    }
+
+    input.value = value.toString();
+    return value;
 }

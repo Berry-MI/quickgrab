@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -20,6 +21,11 @@ struct ProxyEndpoint {
     std::chrono::milliseconds latency{std::chrono::milliseconds::max()};
 };
 
+struct AffinityState {
+    std::vector<ProxyEndpoint> proxies;
+    std::size_t cursor{0};
+};
+
 class ProxyPool {
 public:
     explicit ProxyPool(std::chrono::seconds cooldown);
@@ -34,7 +40,7 @@ private:
     std::chrono::seconds cooldown_;
     mutable std::mutex mutex_;
     std::deque<ProxyEndpoint> pool_;
-    std::unordered_map<std::string, ProxyEndpoint> sticky_;
+    std::unordered_map<std::string, AffinityState> sticky_;
 };
 
 } // namespace quickgrab::proxy

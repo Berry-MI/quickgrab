@@ -40,6 +40,11 @@ struct GrabContext {
     bool quickMode{false};
     bool steadyOrder{false};
     bool autoPick{false};
+    bool useProxy{false};
+    std::string proxyAffinity;
+    std::optional<proxy::ProxyEndpoint> assignedProxy;
+    std::vector<proxy::ProxyEndpoint> proxyCandidates;
+    std::size_t proxyCursor{0};
 };
 
 class GrabWorkflow {
@@ -57,13 +62,13 @@ private:
 
     void prepareContext(const model::Request& request, GrabContext& ctx);
 
-    GrabResult createOrder(const GrabContext& ctx, const boost::json::object& payload);
-    GrabResult reConfirmOrder(const GrabContext& ctx, const boost::json::object& payload);
+    GrabResult createOrder(GrabContext& ctx, const boost::json::object& payload);
+    GrabResult reConfirmOrder(GrabContext& ctx, const boost::json::object& payload);
     void scheduleExecution(GrabContext ctx,
                            std::function<void(const GrabResult&)> onFinished);
 
     void refreshOrderParameters(GrabContext& ctx);
-    std::optional<boost::json::object> fetchAddOrderData(const GrabContext& ctx) const;
+    std::optional<boost::json::object> fetchAddOrderData(GrabContext& ctx);
 
     boost::beast::http::request<boost::beast::http::string_body>
     buildPost(const std::string& url,

@@ -155,8 +155,22 @@
                     <span class="slider round"></span>
                 </label>
             </div>
+            <div class="switch-container">
+                <label for="useIpProxy">使用IP代理</label>
+                <label class="switch">
+                    <input id="useIpProxy" type="checkbox">
+                    <span class="slider round"></span>
+                </label>
+            </div>
         </div>
 
+        <div class="form-group" id="proxyThreadGroup" style="display: none;">
+            <label for="proxyThreadCount">线程数量</label>
+            <div class="input-group with-unit">
+                <input type="number" id="proxyThreadCount" value="1" min="1" max="8">
+                <div class="input-unit">线程</div>
+            </div>
+        </div>
 
         <div class="form-group">
             <label for="delay">延迟下单</label>

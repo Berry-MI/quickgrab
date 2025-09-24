@@ -27,7 +27,8 @@ public:
     HttpResponse fetch(HttpRequest request,
                        const std::string& affinityKey,
                        std::chrono::seconds timeout,
-                       bool useProxy = false);
+                       bool useProxy = false,
+                       const proxy::ProxyEndpoint* overrideProxy = nullptr);
 
     HttpResponse fetch(const std::string& method,
                        const std::string& url,
@@ -38,7 +39,8 @@ public:
                        bool followRedirects = false,
                        unsigned int maxRedirects = 5,
                        std::string* effectiveUrl = nullptr,
-                       bool useProxy = false);
+                       bool useProxy = false,
+                       const proxy::ProxyEndpoint* overrideProxy = nullptr);
 
 private:
     boost::asio::io_context& io_;

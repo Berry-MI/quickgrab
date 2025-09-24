@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <optional>
 #include <random>
 #include <string>
@@ -16,7 +18,6 @@
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
 #include <boost/asio/post.hpp>
-#include <iostream>
 
 namespace quickgrab::workflow {
 namespace {
@@ -72,6 +73,100 @@ bool containsKeyword(std::string_view message, const std::array<std::string_view
             return true;
         }
     }
+    return false;
+}
+
+bool sameProxy(const proxy::ProxyEndpoint& lhs, const proxy::ProxyEndpoint& rhs) {
+    return lhs.host == rhs.host && lhs.port == rhs.port && lhs.username == rhs.username && lhs.password == rhs.password;
+}
+
+std::optional<proxy::ProxyEndpoint> parseProxyCandidate(const boost::json::value& value) {
+    if (!value.is_object()) {
+        return std::nullopt;
+    }
+    const auto& obj = value.as_object();
+    const auto* hostVal = obj.if_contains("host");
+    const auto* portVal = obj.if_contains("port");
+    if (!hostVal || !hostVal->is_string() || !portVal) {
+        return std::nullopt;
+    }
+
+    proxy::ProxyEndpoint endpoint;
+    endpoint.host = std::string(hostVal->as_string());
+    if (endpoint.host.empty()) {
+        return std::nullopt;
+    }
+
+    if (portVal->is_int64()) {
+        auto port = portVal->as_int64();
+        if (port <= 0 || port > 65535) {
+            return std::nullopt;
+        }
+        endpoint.port = static_cast<std::uint16_t>(port);
+    } else if (portVal->is_string()) {
+        try {
+            auto port = std::stol(std::string(portVal->as_string()));
+            if (port <= 0 || port > 65535) {
+                return std::nullopt;
+            }
+            endpoint.port = static_cast<std::uint16_t>(port);
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    } else {
+        return std::nullopt;
+    }
+
+    if (const auto* userVal = obj.if_contains("username"); userVal && userVal->is_string()) {
+        endpoint.username = std::string(userVal->as_string());
+    }
+    if (const auto* passVal = obj.if_contains("password"); passVal && passVal->is_string()) {
+        endpoint.password = std::string(passVal->as_string());
+    }
+    if (const auto* latencyVal = obj.if_contains("latency")) {
+        if (latencyVal->is_int64()) {
+            endpoint.latency = std::chrono::milliseconds(latencyVal->as_int64());
+        } else if (latencyVal->is_double()) {
+            endpoint.latency = std::chrono::milliseconds(static_cast<std::int64_t>(latencyVal->as_double()));
+        }
+    }
+    endpoint.nextAvailable = std::chrono::steady_clock::now();
+    return endpoint;
+}
+
+bool looksLikeProxyError(std::string_view message) {
+    return message.find("Proxy") != std::string_view::npos || message.find("proxy") != std::string_view::npos;
+}
+
+bool rotateProxy(GrabContext& ctx) {
+    while (ctx.proxyCursor < ctx.proxyCandidates.size()) {
+        const auto& candidate = ctx.proxyCandidates[ctx.proxyCursor++];
+        if (!candidate.host.empty() && candidate.port != 0) {
+            ctx.assignedProxy = candidate;
+            return true;
+        }
+    }
+    ctx.assignedProxy.reset();
+    return false;
+}
+
+bool handleProxyFailure(GrabContext& ctx, std::string_view error) {
+    if (!ctx.useProxy || !looksLikeProxyError(error)) {
+        return false;
+    }
+
+    if (rotateProxy(ctx)) {
+        if (ctx.assignedProxy) {
+            util::log(util::LogLevel::info,
+                      "请求ID=" + std::to_string(ctx.request.id) + " 切换代理为 " + ctx.assignedProxy->host + ':' +
+                          std::to_string(ctx.assignedProxy->port));
+        }
+        return true;
+    }
+
+    util::log(util::LogLevel::warn,
+              "请求ID=" + std::to_string(ctx.request.id) + " 所有代理均不可用，将改为直连");
+    ctx.useProxy = false;
     return false;
 }
 
@@ -221,9 +316,88 @@ void GrabWorkflow::prepareContext(const model::Request& request, GrabContext& ct
             ctx.processingTime = static_cast<long>(metric->as_int64());
         }
     }
+
+    ctx.useProxy = shouldUseProxy(ctx.extension);
+    ctx.proxyAffinity = resolveAffinity(ctx.extension);
+    if (ctx.extension.if_contains("__proxyAssigned") &&
+        ctx.extension.at("__proxyAssigned").is_bool() &&
+        !ctx.extension.at("__proxyAssigned").as_bool()) {
+        ctx.useProxy = false;
+    }
+    if (auto hostVal = ctx.extension.if_contains("__proxyHost")) {
+        if (hostVal->is_string()) {
+            proxy::ProxyEndpoint endpoint;
+            endpoint.host = std::string(hostVal->as_string());
+            if (auto portVal = ctx.extension.if_contains("__proxyPort")) {
+                if (portVal->is_int64()) {
+                    endpoint.port = static_cast<std::uint16_t>(portVal->as_int64());
+                } else if (portVal->is_string()) {
+                    try {
+                        endpoint.port = static_cast<std::uint16_t>(std::stoi(std::string(portVal->as_string())));
+                    } catch (const std::exception&) {
+                        endpoint.port = 0;
+                    }
+                }
+            }
+            if (auto userVal = ctx.extension.if_contains("__proxyUsername")) {
+                if (userVal->is_string()) {
+                    endpoint.username = std::string(userVal->as_string());
+                }
+            }
+            if (auto passVal = ctx.extension.if_contains("__proxyPassword")) {
+                if (passVal->is_string()) {
+                    endpoint.password = std::string(passVal->as_string());
+                }
+            }
+            if (auto latencyVal = ctx.extension.if_contains("__proxyLatency")) {
+                if (latencyVal->is_int64()) {
+                    endpoint.latency = std::chrono::milliseconds(latencyVal->as_int64());
+                }
+            }
+            endpoint.nextAvailable = std::chrono::steady_clock::now();
+            if (endpoint.port != 0 && !endpoint.host.empty()) {
+                ctx.assignedProxy = endpoint;
+            }
+        }
+    }
+    if (auto candidates = ctx.extension.if_contains("__proxyCandidates")) {
+        if (candidates->is_array()) {
+            for (const auto& item : candidates->as_array()) {
+                if (auto parsed = parseProxyCandidate(item)) {
+                    ctx.proxyCandidates.push_back(*parsed);
+                }
+            }
+        }
+    }
+    if (!ctx.proxyCandidates.empty()) {
+        ctx.proxyCursor = 0;
+        if (ctx.assignedProxy) {
+            auto it = std::find_if(ctx.proxyCandidates.begin(), ctx.proxyCandidates.end(),
+                                   [&](const proxy::ProxyEndpoint& entry) {
+                                       return sameProxy(entry, *ctx.assignedProxy);
+                                   });
+            if (it != ctx.proxyCandidates.end()) {
+                ctx.proxyCursor = static_cast<std::size_t>(std::distance(ctx.proxyCandidates.begin(), it) + 1);
+            } else {
+                ctx.assignedProxy = ctx.proxyCandidates.front();
+                ctx.proxyCursor = 1;
+            }
+        } else {
+            ctx.assignedProxy = ctx.proxyCandidates.front();
+            ctx.proxyCursor = 1;
+        }
+    }
+    if (ctx.useProxy && !ctx.assignedProxy) {
+        if (ctx.proxyAffinity.empty()) {
+            ctx.proxyAffinity = ctx.request.threadId;
+        }
+        if (ctx.proxyAffinity.empty()) {
+            ctx.useProxy = false;
+        }
+    }
 }
 
-GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::object& payload) {
+GrabResult GrabWorkflow::createOrder(GrabContext& ctx, const boost::json::object& payload) {
     GrabResult result;
     auto requestBody = quickgrab::util::stringifyJson(payload);
 
@@ -231,7 +405,12 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         try {
-            auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{30});
+            const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+            auto response = httpClient_.fetch(req,
+                                             affinity,
+                                             std::chrono::seconds{30},
+                                             ctx.useProxy,
+                                             (ctx.useProxy && ctx.assignedProxy) ? &*ctx.assignedProxy : nullptr);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.response = json;
@@ -273,6 +452,10 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
             return result;
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
+            if (handleProxyFailure(ctx, ex.what())) {
+                --attempt;
+                continue;
+            }
             if (attempt == kMaxRetries) {
                 result.success = false;
                 result.error = ex.what();
@@ -290,14 +473,19 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
     return result;
 }
 
-GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::json::object& payload) {
+GrabResult GrabWorkflow::reConfirmOrder(GrabContext& ctx, const boost::json::object& payload) {
     GrabResult result;
     auto requestBody = quickgrab::util::stringifyJson(payload);
     auto req = buildPost("https://" + ctx.domain + "/vbuy/ReConfirmOrder/1.0", ctx, toQuery(requestBody));
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         try {
-            auto response = httpClient_.fetch(req, ctx.request.threadId, std::chrono::seconds{20});
+            const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+            auto response = httpClient_.fetch(req,
+                                             affinity,
+                                             std::chrono::seconds{20},
+                                             ctx.useProxy,
+                                             (ctx.useProxy && ctx.assignedProxy) ? &*ctx.assignedProxy : nullptr);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.attempts = attempt + 1;
@@ -308,6 +496,10 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
             }
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
+            if (handleProxyFailure(ctx, ex.what())) {
+                --attempt;
+                continue;
+            }
             if (attempt == kMaxRetries) {
                 result.error = ex.what();
             }
@@ -327,7 +519,6 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
 void GrabWorkflow::scheduleExecution(GrabContext ctx,
                                      std::function<void(const GrabResult&)> onFinished) {
     refreshOrderParameters(ctx);
-    //std::cout << "payload = " << boost::json::serialize(payloadValue) << std::endl;
     boost::json::object payload;
     bool hasPayload = false;
     if (ctx.request.orderParameters.is_object()) {
@@ -354,7 +545,6 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
         ctx.request.orderParameters = payload;
         ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
     }
-    std::cout << "payload = " << boost::json::serialize(payload) << std::endl;
     auto delay = computeDelay(ctx);
     util::log(util::LogLevel::info, "请求ID=" + std::to_string(ctx.request.id) +
         (ctx.quickMode ? " [快速模式]" : "") +
@@ -405,7 +595,6 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
     }
 
     auto dataObj = fetchAddOrderData(ctx);
-	std::cout << "dataObj = " << (dataObj ? boost::json::serialize(*dataObj) : "null") << std::endl;
     if (!dataObj) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 无法获取下单数据，将尝试使用已有参数");
@@ -436,40 +625,46 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
               "请求ID=" + std::to_string(ctx.request.id) + " 重新生成订单参数成功");
 }
 
-std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabContext& ctx) const {
+std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(GrabContext& ctx) {
     std::vector<util::HttpClient::Header> headers{
         {"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
         {"Cookie", ctx.request.cookies},
         {"Referer", "https://weidian.com/"},
         {"User-Agent", kDesktopUA}};
 
-    bool useProxy = shouldUseProxy(ctx.extension);
-    std::string affinity = resolveAffinity(ctx.extension);
-    if (useProxy && affinity.empty()) {
-        useProxy = false;
-    }
-
-    try {
-        auto response = httpClient_.fetch("GET",
-                                          ctx.request.link,
-                                          headers,
-                                          "",
-                                          affinity,
-                                          std::chrono::seconds{30},
-                                          true,
-                                          5,
-                                          nullptr,
-                                          useProxy);
-        auto data = util::extractDataObject(response.body());
-        if (!data || !data->is_object()) {
+    bool triedDirect = !ctx.useProxy;
+    while (true) {
+        try {
+            const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+            auto response = httpClient_.fetch("GET",
+                                              ctx.request.link,
+                                              headers,
+                                              "",
+                                              affinity,
+                                              std::chrono::seconds{30},
+                                              true,
+                                              5,
+                                              nullptr,
+                                              ctx.useProxy,
+                                              (ctx.useProxy && ctx.assignedProxy) ? &*ctx.assignedProxy : nullptr);
+            auto data = util::extractDataObject(response.body());
+            if (!data || !data->is_object()) {
+                return std::nullopt;
+            }
+            return data->as_object();
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      std::string{"请求ID="} + std::to_string(ctx.request.id) +
+                          " 获取下单页面失败: " + ex.what());
+            if (handleProxyFailure(ctx, ex.what())) {
+                continue;
+            }
+            if (!triedDirect && !ctx.useProxy) {
+                triedDirect = true;
+                continue;
+            }
             return std::nullopt;
         }
-        return data->as_object();
-    } catch (const std::exception& ex) {
-        util::log(util::LogLevel::warn,
-                  std::string{"请求ID="} + std::to_string(ctx.request.id) +
-                      " 获取下单页面失败: " + ex.what());
-        return std::nullopt;
     }
 }
 

@@ -32,7 +32,6 @@ add_library(quickgrab_core
     src/service/AuthService.cpp
     src/service/GrabService.cpp
     src/service/MailService.cpp
-    src/service/ProxyService.cpp
     src/service/QueryService.cpp
     src/service/StatisticsService.cpp
     src/repository/DatabaseConfig.cpp
@@ -41,6 +40,7 @@ add_library(quickgrab_core
     src/repository/ResultsRepository.cpp
     src/repository/BuyersRepository.cpp
     src/proxy/ProxyPool.cpp
+    src/proxy/KdlProxyClient.cpp
     src/util/HttpClient.cpp
     src/util/JsonUtil.cpp
     src/util/CommonUtil.cpp

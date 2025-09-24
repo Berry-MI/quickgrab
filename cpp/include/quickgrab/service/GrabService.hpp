@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quickgrab/proxy/KdlProxyClient.hpp"
 #include "quickgrab/proxy/ProxyPool.hpp"
 #include "quickgrab/repository/RequestsRepository.hpp"
 #include "quickgrab/repository/ResultsRepository.hpp"
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <optional>
+#include <vector>
 
 namespace quickgrab::service {
 
@@ -28,6 +30,8 @@ public:
                 proxy::ProxyPool& proxies,
                 MailService& mailService);
 
+    void setProxyConfig(proxy::KdlProxyConfig config);
+
     void processPending();
     std::optional<int> handleRequest(const model::Request& request);
 
@@ -38,6 +42,8 @@ private:
     long computeAdjustedLatency(const model::Request& request) const;
     long computeProcessingTime(const model::Request& request) const;
     long computeSchedulingTime() const;
+    std::vector<proxy::ProxyEndpoint> fetchProxiesForRequest(const model::Request& request);
+    bool requestWantsProxy(const boost::json::object& extension) const;
 
     boost::asio::io_context& io_;
     boost::asio::thread_pool& worker_;
@@ -53,6 +59,8 @@ private:
     std::chrono::system_clock::time_point prestartTime_;
     long schedulingTime_;
     mutable std::mutex metricsMutex_;
+    std::optional<proxy::KdlProxyConfig> proxyConfig_;
+    mutable std::mutex proxyMutex_;
 };
 
 } // namespace quickgrab::service

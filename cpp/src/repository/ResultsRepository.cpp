@@ -372,7 +372,8 @@ void ResultsRepository::insertResult(const model::Result& result) {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());
         mysqlx::Table table = schema.getTable("results");
         auto responsePayload = result.responseMessage.is_null() ? result.payload : result.responseMessage;
-        table.insert("request_id",
+        table.insert(
+            //"request_id",
                     "device_id",
                     "buyer_id",
                     "thread_id",
@@ -396,7 +397,8 @@ void ResultsRepository::insertResult(const model::Result& result) {
                     "estimated_earnings",
                     "extension"
                     )
-            .values(result.requestId,
+            .values(
+                //result.requestId,
                     result.deviceId,
                     result.buyerId,
                     result.threadId,

@@ -281,15 +281,32 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
     auto requestBody = quickgrab::util::stringifyJson(payload);
 
     auto req = buildPost("https://" + ctx.domain + "/vbuy/CreateOrder/1.0", ctx, toQuery(requestBody));
+    bool useProxy = ctx.useProxy;
+    std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
+        const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+        auto handleFailure = [&](const std::exception& ex) {
+            if (attempt == kMaxRetries) {
+                result.success = false;
+                result.error = ex.what();
+                result.message.clear();
+                return false;
+            }
+            static thread_local std::mt19937 rng{std::random_device{}()};
+            auto base = static_cast<int>(std::pow(2.0, attempt) * 100);
+            std::uniform_int_distribution<int> jitter(-base / 5, base / 5);
+            auto waitTime = std::chrono::milliseconds(base + jitter(rng));
+            std::this_thread::sleep_for(waitTime);
+            return true;
+        };
+
         try {
-            const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
             auto response = httpClient_.fetch(req,
                                              affinity,
                                              std::chrono::seconds{30},
-                                             ctx.useProxy,
-                                             ctx.assignedProxy ? &*ctx.assignedProxy : nullptr);
+                                             useProxy,
+                                             overrideProxy ? &*overrideProxy : nullptr);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.response = json;
@@ -329,19 +346,34 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
                 return result;
             }
             return result;
-        } catch (const std::exception& ex) {
+        } catch (const util::ProxyError& ex) {
             util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
-            if (attempt == kMaxRetries) {
-                result.success = false;
-                result.error = ex.what();
-                result.message.clear();
+            bool retried = false;
+            if (overrideProxy) {
+                util::log(util::LogLevel::info,
+                          std::string("CreateOrder proxy ") + overrideProxy->host + ":" +
+                              std::to_string(overrideProxy->port) + " failed with status " +
+                              std::to_string(ex.status()) + ", retrying with proxy pool or direct connection");
+                overrideProxy.reset();
+                retried = true;
+            } else if (useProxy) {
+                util::log(util::LogLevel::info,
+                          std::string("CreateOrder proxy request failed with status ") +
+                              std::to_string(ex.status()) + ", retrying without proxy");
+                useProxy = false;
+                retried = true;
+            }
+            if (retried) {
+                continue;
+            }
+            if (!handleFailure(ex)) {
                 return result;
             }
-            static thread_local std::mt19937 rng{std::random_device{}()};
-            auto base = static_cast<int>(std::pow(2.0, attempt) * 100);
-            std::uniform_int_distribution<int> jitter(-base / 5, base / 5);
-            auto waitTime = std::chrono::milliseconds(base + jitter(rng));
-            std::this_thread::sleep_for(waitTime);
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
+            if (!handleFailure(ex)) {
+                return result;
+            }
         }
     }
     result.error = "CreateOrder exhausted retries";
@@ -352,15 +384,27 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
     GrabResult result;
     auto requestBody = quickgrab::util::stringifyJson(payload);
     auto req = buildPost("https://" + ctx.domain + "/vbuy/ReConfirmOrder/1.0", ctx, toQuery(requestBody));
+    bool useProxy = ctx.useProxy;
+    std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
 
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
+        const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+        auto handleFailure = [&](const std::exception& ex) {
+            if (attempt == kMaxRetries) {
+                result.error = ex.what();
+                return false;
+            }
+            auto waitTime = std::chrono::milliseconds(static_cast<int>(std::pow(2.0, attempt) * 80));
+            std::this_thread::sleep_for(waitTime);
+            return true;
+        };
+
         try {
-            const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
             auto response = httpClient_.fetch(req,
                                              affinity,
                                              std::chrono::seconds{20},
-                                             ctx.useProxy,
-                                             ctx.assignedProxy ? &*ctx.assignedProxy : nullptr);
+                                             useProxy,
+                                             overrideProxy ? &*overrideProxy : nullptr);
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.attempts = attempt + 1;
@@ -369,15 +413,34 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
                 result.success = true;
                 return result;
             }
+        } catch (const util::ProxyError& ex) {
+            util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
+            bool retried = false;
+            if (overrideProxy) {
+                util::log(util::LogLevel::info,
+                          std::string("ReConfirmOrder proxy ") + overrideProxy->host + ":" +
+                              std::to_string(overrideProxy->port) + " failed with status " +
+                              std::to_string(ex.status()) + ", retrying with proxy pool or direct connection");
+                overrideProxy.reset();
+                retried = true;
+            } else if (useProxy) {
+                util::log(util::LogLevel::info,
+                          std::string("ReConfirmOrder proxy request failed with status ") +
+                              std::to_string(ex.status()) + ", retrying without proxy");
+                useProxy = false;
+                retried = true;
+            }
+            if (retried) {
+                continue;
+            }
+            if (!handleFailure(ex)) {
+                break;
+            }
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
-            if (attempt == kMaxRetries) {
-                result.error = ex.what();
+            if (!handleFailure(ex)) {
+                break;
             }
-        }
-        if (attempt < kMaxRetries) {
-            auto waitTime = std::chrono::milliseconds(static_cast<int>(std::pow(2.0, attempt) * 80));
-            std::this_thread::sleep_for(waitTime);
         }
     }
     result.success = false;
@@ -506,30 +569,66 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
         {"Referer", "https://weidian.com/"},
         {"User-Agent", kDesktopUA}};
 
+    const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+    bool useProxy = ctx.useProxy;
+    std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
+
     try {
-        const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
-        auto response = httpClient_.fetch("GET",
-                                          ctx.request.link,
-                                          headers,
-                                          "",
-                                          affinity,
-                                          std::chrono::seconds{30},
-                                          true,
-                                          5,
-                                          nullptr,
-                                          ctx.useProxy,
-                                          ctx.assignedProxy ? &*ctx.assignedProxy : nullptr);
-        auto data = util::extractDataObject(response.body());
-        if (!data || !data->is_object()) {
-            return std::nullopt;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            try {
+                auto response = httpClient_.fetch("GET",
+                                                  ctx.request.link,
+                                                  headers,
+                                                  "",
+                                                  affinity,
+                                                  std::chrono::seconds{30},
+                                                  true,
+                                                  5,
+                                                  nullptr,
+                                                  useProxy,
+                                                  overrideProxy ? &*overrideProxy : nullptr);
+                auto data = util::extractDataObject(response.body());
+                if (!data || !data->is_object()) {
+                    return std::nullopt;
+                }
+                return data->as_object();
+            } catch (const util::ProxyError& ex) {
+                util::log(util::LogLevel::warn,
+                          std::string{"请求ID="} + std::to_string(ctx.request.id) +
+                              " 获取下单页面失败: " + ex.what());
+                bool retried = false;
+                if (overrideProxy) {
+                    util::log(util::LogLevel::info,
+                              std::string{"请求ID="} + std::to_string(ctx.request.id) + " 指定代理 " + overrideProxy->host +
+                                  ":" + std::to_string(overrideProxy->port) + " 失败(" +
+                                  std::to_string(ex.status()) + "), 将尝试代理池或直连重试获取下单页面");
+                    overrideProxy.reset();
+                    retried = true;
+                } else if (useProxy) {
+                    util::log(util::LogLevel::info,
+                              std::string{"请求ID="} + std::to_string(ctx.request.id) +
+                                  " 代理连接失败(" + std::to_string(ex.status()) + "), 将改用直连重试获取下单页面");
+                    useProxy = false;
+                    retried = true;
+                }
+                if (!retried) {
+                    throw;
+                }
+            }
         }
-        return data->as_object();
+    } catch (const util::ProxyError& ex) {
+        util::log(util::LogLevel::warn,
+                  std::string{"请求ID="} + std::to_string(ctx.request.id) +
+                      " 获取下单页面失败: " + ex.what());
+        return std::nullopt;
     } catch (const std::exception& ex) {
         util::log(util::LogLevel::warn,
                   std::string{"请求ID="} + std::to_string(ctx.request.id) +
                       " 获取下单页面失败: " + ex.what());
         return std::nullopt;
     }
+
+    return std::nullopt;
 }
 
 boost::beast::http::request<boost::beast::http::string_body>

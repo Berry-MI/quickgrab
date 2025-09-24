@@ -7,10 +7,32 @@
 #include <boost/beast/http.hpp>
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace quickgrab::util {
+
+class ProxyError : public std::runtime_error {
+public:
+    enum class Type {
+        connect_failed,
+        authentication_required,
+    };
+
+    ProxyError(Type type, int status, const std::string& message)
+        : std::runtime_error(message)
+        , type_(type)
+        , status_(status) {}
+
+    [[nodiscard]] Type type() const noexcept { return type_; }
+
+    [[nodiscard]] int status() const noexcept { return status_; }
+
+private:
+    Type type_;
+    int status_;
+};
 
 class HttpClient {
 public:

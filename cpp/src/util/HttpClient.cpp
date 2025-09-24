@@ -238,8 +238,10 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 boost::beast::http::response<boost::beast::http::empty_body> connectResponse;
                 boost::beast::http::read(lowest, connectBuffer, connectResponse);
                 if (connectResponse.result() != boost::beast::http::status::ok) {
-                    throw std::runtime_error("Proxy CONNECT failed with status " +
-                                             std::to_string(connectResponse.result_int()));
+                    throw ProxyError(ProxyError::Type::connect_failed,
+                                     connectResponse.result_int(),
+                                     "Proxy CONNECT failed with status " +
+                                         std::to_string(connectResponse.result_int()));
                 }
 
                 if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
@@ -288,7 +290,9 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             }
 
             if (response.result() == boost::beast::http::status::proxy_authentication_required) {
-                throw std::runtime_error("Proxy authentication required");
+                throw ProxyError(ProxyError::Type::authentication_required,
+                                 response.result_int(),
+                                 "Proxy authentication required");
             }
 
             reportSuccess();

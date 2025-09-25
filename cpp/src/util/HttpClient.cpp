@@ -308,26 +308,40 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
     request.set(boost::beast::http::field::host, parsed.host);
 
     constexpr unsigned kMaxProxyAttempts = 3;
-    const bool allowProxyRetries = useProxy && overrideProxy == nullptr;
+    const bool hasOverrideProxy = overrideProxy != nullptr;
+    const bool allowProxyRetries = useProxy && !hasOverrideProxy;
+    const unsigned proxyAttemptLimit =
+        hasOverrideProxy ? 1u : (useProxy ? (allowProxyRetries ? kMaxProxyAttempts : 1u) : 0u);
+    const bool allowDirectFallback = allowProxyRetries;
+    const unsigned totalAttempts = std::max(1u, proxyAttemptLimit + (allowDirectFallback ? 1u : 0u));
 
     std::exception_ptr lastException;
 
-    const unsigned attempts = allowProxyRetries ? kMaxProxyAttempts : 1;
-
-    for (unsigned attempt = 0; attempt < attempts; ++attempt) {
-        const proxy::ProxyEndpoint* proxyPtr = overrideProxy;
+    for (unsigned attempt = 0; attempt < totalAttempts; ++attempt) {
+        bool shouldUseProxy = false;
+        const proxy::ProxyEndpoint* proxyPtr = nullptr;
         std::optional<proxy::ProxyEndpoint> acquired;
-        if (useProxy && proxyPtr == nullptr) {
+
+        if (hasOverrideProxy) {
+            shouldUseProxy = true;
+            proxyPtr = overrideProxy;
+        } else if (useProxy && attempt < proxyAttemptLimit) {
             if (affinityKey.empty()) {
-                util::log(util::LogLevel::warn, "Proxy requested but affinity key is empty; sending directly");
+                util::log(util::LogLevel::warn,
+                          "Proxy requested but affinity key is empty; sending directly");
             } else {
                 acquired = proxyPool_.acquire(affinityKey);
                 if (!acquired) {
-                    util::log(util::LogLevel::warn, "No proxy available for affinity key " + affinityKey);
+                    util::log(util::LogLevel::warn,
+                              "No proxy available for affinity key " + affinityKey);
                 } else {
                     proxyPtr = &*acquired;
+                    shouldUseProxy = true;
                 }
             }
+        } else if (allowDirectFallback && attempt == proxyAttemptLimit) {
+            util::log(util::LogLevel::info,
+                      "All proxy attempts failed, falling back to direct connection");
         }
 
         auto reportSuccess = [&]() {
@@ -342,7 +356,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
         };
 
         try {
-            if (proxyPtr) {
+            if (shouldUseProxy && proxyPtr) {
                 boost::asio::ip::tcp::resolver resolver(io_);
                 auto proxyResults = resolver.resolve(proxyPtr->host, std::to_string(proxyPtr->port));
 

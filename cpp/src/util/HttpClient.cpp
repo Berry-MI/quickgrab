@@ -86,14 +86,22 @@ bool configureSslTrustStore(boost::asio::ssl::context& context) {
     }
 
     const std::filesystem::path sourceRoot = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
-    emplaceUnique(sourceRoot / "data" / "cacert.pem");
     emplaceUnique(sourceRoot / "cacert.pem");
+    const auto cppRoot = sourceRoot / "cpp";
+    emplaceUnique(sourceRoot / "data" / "cacert.pem");
+    emplaceUnique(cppRoot / "cacert.pem");
+    emplaceUnique(cppRoot / "data" / "cacert.pem");
 
     std::error_code ec;
     const std::filesystem::path current = std::filesystem::current_path(ec);
     if (!ec) {
         emplaceUnique(current / "cacert.pem");
         emplaceUnique(current / "data" / "cacert.pem");
+        const auto parent = current.parent_path();
+        if (!parent.empty()) {
+            emplaceUnique(parent / "cacert.pem");
+            emplaceUnique(parent / "data" / "cacert.pem");
+        }
     }
 
     for (const auto& candidate : candidates) {
@@ -356,7 +364,8 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
                     boost::beast::http::write(lowest, connectRequest);
                     boost::beast::flat_buffer connectBuffer;
-                    boost::beast::http::response_parser<boost::beast::http::empty_body> connectParser;
+                    boost::beast::http::response_parser<boost::beast::http::string_body> connectParser;
+                    connectParser.body_limit(64 * 1024);
                     connectParser.skip(true);
                     boost::beast::http::read(lowest, connectBuffer, connectParser);
                     const auto& connectResponse = connectParser.get();

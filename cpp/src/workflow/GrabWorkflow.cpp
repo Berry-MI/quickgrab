@@ -577,6 +577,21 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
     try {
         for (int attempt = 0; attempt < 2; ++attempt) {
             try {
+                util::log(util::LogLevel::info,
+                "请求ID=" + std::to_string(ctx.request.id) +
+                    " 开始 fetch: method=GET"
+                    ", url=" + ctx.request.link +
+                    ", affinity=" + affinity +
+                    ", useProxy=" + (useProxy ? "true" : "false") +
+                    (overrideProxy
+                        ? (", overrideProxy=" + overrideProxy->host + ":" + std::to_string(overrideProxy->port))
+                        : ", overrideProxy=<none>") +
+                    ", timeout=30s, maxRedirects=5");
+
+                    for (const auto& h : headers) {
+                        util::log(util::LogLevel::debug, "请求ID=" + std::to_string(ctx.request.id) +
+                            " header: " + h.name + " = " + h.value);
+                    }
                 auto response = httpClient_.fetch("GET",
                                                   ctx.request.link,
                                                   headers,

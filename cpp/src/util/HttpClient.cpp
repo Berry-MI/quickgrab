@@ -66,7 +66,7 @@ bool configureSslTrustStore(boost::asio::ssl::context& context) {
         candidates.emplace_back(std::filesystem::current_path() / relative);
     };
 
-    appendRelative("cacert.pem");
+    appendRelative("../../data/cacert.pem");
     appendRelative("data/cacert.pem");
     appendRelative("../data/cacert.pem");
     appendRelative("../../data/cacert.pem");

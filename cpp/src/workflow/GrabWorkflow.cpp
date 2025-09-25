@@ -40,7 +40,8 @@ constexpr std::array<std::string_view, 11> kRetryKeywords{
     "啊哦~ 人潮拥挤，请稍后重试~",
     "请升级到最新版本后重试"};
 
-constexpr std::array<std::string_view, 12> kUpdateKeywords{
+constexpr std::array<std::string_view, 13> kUpdateKeywords{
+    "不能购买自己店铺的商品",
     "确认",
     "地址",
     "自提",

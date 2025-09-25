@@ -48,48 +48,69 @@ bool loadCertificateBundle(boost::asio::ssl::context& context, const std::filesy
 }
 
 bool configureSslTrustStore(boost::asio::ssl::context& context) {
-    context.set_default_verify_paths();
+    bool trustConfigured = false;
+
+    try {
+        context.set_default_verify_paths();
+        log(LogLevel::info, "已加载系统默认证书目录");
+        trustConfigured = true;
+    } catch (const std::exception& ex) {
+        log(LogLevel::warn,
+            std::string("加载系统默认证书目录失败: ") + ex.what());
+    }
 
     std::vector<std::filesystem::path> candidates;
-    auto addCandidate = [&candidates](const char* value) {
-        if (value && *value) {
-            candidates.emplace_back(value);
+    auto emplaceUnique = [&candidates](const std::filesystem::path& path) {
+        if (path.empty()) {
+            return;
+        }
+        if (std::find(candidates.begin(), candidates.end(), path) == candidates.end()) {
+            candidates.push_back(path);
         }
     };
 
-    addCandidate(std::getenv("QUICKGRAB_CACERT"));
-    addCandidate(std::getenv("CURL_CA_BUNDLE"));
-    addCandidate(std::getenv("SSL_CERT_FILE"));
-
-    auto appendRelative = [&candidates](const std::filesystem::path& relative) {
-        candidates.emplace_back(relative);
-        candidates.emplace_back(std::filesystem::current_path() / relative);
+    auto addEnvCandidate = [&](const char* name) {
+        if (const char* value = std::getenv(name); value && *value) {
+            emplaceUnique(std::filesystem::path(value));
+        }
     };
 
-    appendRelative("cacert.pem");
-    appendRelative("data/cacert.pem");
-    appendRelative("../data/cacert.pem");
-    appendRelative("../../data/cacert.pem");
-    appendRelative("../cacert.pem");
-    appendRelative("../../cacert.pem");
+    addEnvCandidate("QUICKGRAB_CACERT");
+    addEnvCandidate("CURL_CA_BUNDLE");
+    addEnvCandidate("SSL_CERT_FILE");
 
-    bool loaded = false;
+    if (const char* home = std::getenv("QUICKGRAB_HOME"); home && *home) {
+        std::filesystem::path homePath(home);
+        emplaceUnique(homePath / "cacert.pem");
+        emplaceUnique(homePath / "data" / "cacert.pem");
+    }
+
+    const std::filesystem::path sourceRoot = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    emplaceUnique(sourceRoot / "data" / "cacert.pem");
+    emplaceUnique(sourceRoot / "cacert.pem");
+
+    std::error_code ec;
+    const std::filesystem::path current = std::filesystem::current_path(ec);
+    if (!ec) {
+        emplaceUnique(current / "cacert.pem");
+        emplaceUnique(current / "data" / "cacert.pem");
+    }
+
     for (const auto& candidate : candidates) {
         if (loadCertificateBundle(context, candidate)) {
-            loaded = true;
+            trustConfigured = true;
             break;
         }
     }
 
-    if (loaded) {
-        context.set_verify_mode(boost::asio::ssl::verify_peer);
-        return true;
+    if (!trustConfigured) {
+        throw std::runtime_error(
+            "未能加载任何 CA 证书，请通过 QUICKGRAB_CACERT/CURL_CA_BUNDLE/SSL_CERT_FILE "
+            "或 QUICKGRAB_HOME 指向包含 curl cacert.pem 的目录");
     }
 
-    log(LogLevel::warn,
-        "未找到可用的 CA 证书文件，将禁用服务器证书校验 (仅用于调试)");
-    context.set_verify_mode(boost::asio::ssl::verify_none);
-    return false;
+    context.set_verify_mode(boost::asio::ssl::verify_peer);
+    return true;
 }
 
 template <typename Stream>

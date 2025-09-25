@@ -3,23 +3,112 @@
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl/host_name_verification.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
-#include <openssl/ssl.h>
 #include <boost/beast/version.hpp>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
+#include <vector>
 
 
 namespace quickgrab::util {
 namespace {
 constexpr unsigned kHttpVersion = 11;
+
+bool loadCertificateBundle(boost::asio::ssl::context& context, const std::filesystem::path& path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec) {
+        return false;
+    }
+
+    try {
+        context.load_verify_file(path.string());
+        log(LogLevel::info, "加载 CA 证书文件: " + path.string());
+        return true;
+    } catch (const std::exception& ex) {
+        log(LogLevel::warn, "加载 CA 证书失败 " + path.string() + ": " + ex.what());
+    }
+    return false;
+}
+
+bool configureSslTrustStore(boost::asio::ssl::context& context) {
+    context.set_default_verify_paths();
+
+    std::vector<std::filesystem::path> candidates;
+    auto addCandidate = [&candidates](const char* value) {
+        if (value && *value) {
+            candidates.emplace_back(value);
+        }
+    };
+
+    addCandidate(std::getenv("QUICKGRAB_CACERT"));
+    addCandidate(std::getenv("CURL_CA_BUNDLE"));
+    addCandidate(std::getenv("SSL_CERT_FILE"));
+
+    auto appendRelative = [&candidates](const std::filesystem::path& relative) {
+        candidates.emplace_back(relative);
+        candidates.emplace_back(std::filesystem::current_path() / relative);
+    };
+
+    appendRelative("cacert.pem");
+    appendRelative("data/cacert.pem");
+    appendRelative("../data/cacert.pem");
+    appendRelative("../../data/cacert.pem");
+    appendRelative("../cacert.pem");
+    appendRelative("../../cacert.pem");
+
+    bool loaded = false;
+    for (const auto& candidate : candidates) {
+        if (loadCertificateBundle(context, candidate)) {
+            loaded = true;
+            break;
+        }
+    }
+
+    if (loaded) {
+        context.set_verify_mode(boost::asio::ssl::verify_peer);
+        return true;
+    }
+
+    log(LogLevel::warn,
+        "未找到可用的 CA 证书文件，将禁用服务器证书校验 (仅用于调试)");
+    context.set_verify_mode(boost::asio::ssl::verify_none);
+    return false;
+}
+
+template <typename Stream>
+void configureTlsStream(Stream& stream, const std::string& host, bool verifyCertificates) {
+    if (verifyCertificates) {
+        stream.set_verify_mode(boost::asio::ssl::verify_peer);
+    } else {
+        stream.set_verify_mode(boost::asio::ssl::verify_none);
+    }
+    if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
+        unsigned long err = ::ERR_get_error();
+        throw boost::system::system_error(
+            {static_cast<int>(err), boost::asio::error::get_ssl_category()},
+            "Failed to set SNI host name");
+    }
+    if (verifyCertificates && SSL_set1_host(stream.native_handle(), host.c_str()) != 1) {
+        stream.set_verify_callback(boost::asio::ssl::host_name_verification(host));
+    }
+}
 
 struct ParsedUrl {
     std::string scheme;
@@ -152,10 +241,8 @@ std::string authorityFrom(const ParsedUrl& parsed) {
 HttpClient::HttpClient(boost::asio::io_context& io, proxy::ProxyPool& pool)
     : io_(io)
     , proxyPool_(pool)
-    , sslContext_(boost::asio::ssl::context::tls_client) {
-    sslContext_.set_default_verify_paths();
-    sslContext_.set_verify_mode(boost::asio::ssl::verify_none);
-}
+    , sslContext_(boost::asio::ssl::context::tls_client)
+    , verifyCertificates_(configureSslTrustStore(sslContext_)) {}
 
 HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                                            const std::string& affinityKey,
@@ -229,24 +316,28 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 boost::beast::http::request<boost::beast::http::empty_body> connectRequest{
                     boost::beast::http::verb::connect, authorityFrom(parsed), kHttpVersion};
                 connectRequest.set(boost::beast::http::field::host, authorityFrom(parsed));
+                connectRequest.set(boost::beast::http::field::user_agent, "quickgrab-http-client/1.0");
+                connectRequest.set(boost::beast::http::field::connection, "keep-alive");
+                connectRequest.keep_alive(true);
                 if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
                     connectRequest.set("Proxy-Authorization", auth);
                 }
 
                 boost::beast::http::write(lowest, connectRequest);
                 boost::beast::flat_buffer connectBuffer;
-                boost::beast::http::response<boost::beast::http::empty_body> connectResponse;
-                boost::beast::http::read(lowest, connectBuffer, connectResponse);
-                if (connectResponse.result() != boost::beast::http::status::ok) {
+                boost::beast::http::response_parser<boost::beast::http::empty_body> connectParser;
+                connectParser.skip(true);
+                boost::beast::http::read(lowest, connectBuffer, connectParser);
+                const auto& connectResponse = connectParser.get();
+                if (connectResponse.result() != boost::beast::http::status::ok &&
+                    connectResponse.result() != boost::beast::http::status::no_content) {
                     throw ProxyError(ProxyError::Type::connect_failed,
                                      connectResponse.result_int(),
                                      "Proxy CONNECT failed with status " +
                                          std::to_string(connectResponse.result_int()));
                 }
 
-                if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
-                    throw std::runtime_error("Failed to set SNI host name");
-                }
+                configureTlsStream(stream, parsed.host, verifyCertificates_);
 
                 lowest.expires_after(timeout);
                 stream.handshake(boost::asio::ssl::stream_base::client);
@@ -304,12 +395,12 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
 
         if (parsed.scheme == "https") {
             boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
-            if (!SSL_set_tlsext_host_name(stream.native_handle(), parsed.host.c_str())) {
-                throw std::runtime_error("Failed to set SNI host name");
-            }
             auto& lowest = boost::beast::get_lowest_layer(stream);
             lowest.expires_after(timeout);
             lowest.connect(results);
+
+            configureTlsStream(stream, parsed.host, verifyCertificates_);
+
             stream.handshake(boost::asio::ssl::stream_base::client);
 
             boost::beast::http::write(stream, request);

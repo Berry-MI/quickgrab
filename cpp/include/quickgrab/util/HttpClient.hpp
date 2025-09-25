@@ -68,6 +68,7 @@ private:
     boost::asio::io_context& io_;
     proxy::ProxyPool& proxyPool_;
     boost::asio::ssl::context sslContext_;
+    bool verifyCertificates_;
 };
 
 } // namespace quickgrab::util

@@ -30,6 +30,13 @@ cmake --build build
 默认在 cpp/data/database.json 加载数据库连接（如缺失则使用 127.0.0.1:33060/grab_system）；可通过环境变量 QUICKGRAB_DB_HOST/PORT/USER/PASSWORD/NAME/POOL 覆盖。
 
 可选在 cpp/data/kdlproxy.json 配置快代理（Kuaidaili）拉取参数：secretId/signature/username/password/count/refreshMinutes，或通过环境变量 QUICKGRAB_PROXY_ENDPOINT/SECRET_ID/SIGNATURE/USERNAME/PASSWORD/BATCH/REFRESH_MINUTES 覆盖。启用后服务在抢购请求启用代理时即时调用 `https://dps.kdlapi.com/api/getdps/` 拉取候选 IP，测量延迟后自动挑选最快节点复用。
+
+### HTTPS 信任链配置
+
+- `cpp/data/cacert.pem` 提供与 curl 同源的 CA 证书集合，HttpClient 会在启动时优先加载该文件，用于校验代理隧道上的 HTTPS 目标站证书。
+  如需更新，可从 <https://curl.se/docs/caextract.html> 下载最新的 `cacert.pem` 覆盖。
+- 亦可通过环境变量 `QUICKGRAB_CACERT`、`CURL_CA_BUNDLE` 或 `SSL_CERT_FILE` 指定自定义证书路径；若均缺失则回退到系统默认证书目录。
+  如果仍未找到可用证书，HttpClient 会在日志中发出警告并仅在调试模式下禁用校验。
 | RequestsMapper.java | repository/RequestsRepository（基于 MySQL） |
 | ResultsMapper.java | repository/ResultsRepository |
 

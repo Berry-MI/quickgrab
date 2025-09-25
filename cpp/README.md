@@ -35,8 +35,8 @@ cmake --build build
 
 - `cpp/data/cacert.pem` 提供与 curl 同源的 CA 证书集合，HttpClient 会在启动时优先加载该文件，用于校验代理隧道上的 HTTPS 目标站证书。
   如需更新，可从 <https://curl.se/docs/caextract.html> 下载最新的 `cacert.pem` 覆盖。
-- 亦可通过环境变量 `QUICKGRAB_CACERT`、`CURL_CA_BUNDLE` 或 `SSL_CERT_FILE` 指定自定义证书路径；若均缺失则回退到系统默认证书目录。
-  如果仍未找到可用证书，HttpClient 会在日志中发出警告并仅在调试模式下禁用校验。
+- 可通过环境变量 `QUICKGRAB_HOME` 指向包含 `data/cacert.pem` 的 QuickGrab 目录，或使用 `QUICKGRAB_CACERT`、`CURL_CA_BUNDLE`、
+  `SSL_CERT_FILE` 显式指定证书路径。若系统目录和上述路径都无法加载，将直接抛出异常阻止在不受信任的环境下继续发起 HTTPS 请求。
 | RequestsMapper.java | repository/RequestsRepository（基于 MySQL） |
 | ResultsMapper.java | repository/ResultsRepository |
 

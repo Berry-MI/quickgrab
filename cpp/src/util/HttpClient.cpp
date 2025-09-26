@@ -328,7 +328,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     connectRequest.set(boost::beast::http::field::user_agent, "asio-beast-proxy-sample/1.0");
                     connectRequest.set(boost::beast::http::field::connection, "keep-alive");
                     if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
-                        connectRequest.set("Proxy-Authorization", auth);
+                        connectRequest.set(boost::beast::http::field::proxy_authorization, auth);
                     }
 
                     boost::beast::http::write(proxyStream, connectRequest);

@@ -214,6 +214,13 @@ std::string authorityFrom(const ParsedUrl& parsed) {
     return parsed.host + ":" + parsed.port;
 }
 
+std::string connectAuthorityFrom(const ParsedUrl& parsed) {
+    if (parsed.port.empty()) {
+        return parsed.host;
+    }
+    return parsed.host + ":" + parsed.port;
+}
+
 } // namespace
 
 HttpClient::HttpClient(boost::asio::io_context& io, proxy::ProxyPool& pool)
@@ -254,7 +261,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
     }
 
     request.erase(boost::beast::http::field::host);
-    request.set(boost::beast::http::field::host, parsed.host);
+    request.set(boost::beast::http::field::host, authorityFrom(parsed));
 
     constexpr unsigned kMaxProxyAttempts = 3;
     const bool hasOverrideProxy = overrideProxy != nullptr;
@@ -314,9 +321,10 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     proxyStream.expires_after(timeout);
                     proxyStream.connect(proxyResults);
 
+                    const auto connectAuthority = connectAuthorityFrom(parsed);
                     boost::beast::http::request<boost::beast::http::empty_body> connectRequest{
-                        boost::beast::http::verb::connect, authorityFrom(parsed), kHttpVersion};
-                    connectRequest.set(boost::beast::http::field::host, authorityFrom(parsed));
+                        boost::beast::http::verb::connect, connectAuthority, kHttpVersion};
+                    connectRequest.set(boost::beast::http::field::host, connectAuthority);
                     connectRequest.set(boost::beast::http::field::user_agent, "asio-beast-proxy-sample/1.0");
                     connectRequest.set(boost::beast::http::field::connection, "keep-alive");
                     if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
@@ -334,6 +342,10 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     const auto& connectResponse = connectParser.get();
                     if (connectResponse.result() != boost::beast::http::status::ok &&
                         connectResponse.result() != boost::beast::http::status::no_content) {
+                        util::log(util::LogLevel::warn,
+                                  "Proxy CONNECT to " + connectAuthority + " failed: " +
+                                      std::to_string(connectResponse.result_int()) + " " +
+                                      std::string(connectResponse.reason()));
                         throw ProxyError(ProxyError::Type::connect_failed,
                                          connectResponse.result_int(),
                                          "Proxy CONNECT failed with status " +
@@ -346,6 +358,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                     proxyStream.expires_after(timeout);
                     tlsStream.handshake(boost::asio::ssl::stream_base::client);
 
+                    request.set(boost::beast::http::field::connection, "close");
                     boost::beast::http::write(tlsStream, request);
                     boost::beast::flat_buffer buffer;
                     HttpResponse response;
@@ -374,6 +387,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 stream.connect(proxyResults);
 
                 HttpRequest proxiedRequest = request;
+                proxiedRequest.set(boost::beast::http::field::connection, "close");
                 proxiedRequest.target(parsed.scheme + "://" + authorityFrom(parsed) + parsed.target);
                 if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
                     proxiedRequest.set("Proxy-Authorization", auth);

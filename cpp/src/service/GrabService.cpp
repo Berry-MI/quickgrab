@@ -290,15 +290,16 @@ void GrabService::processPending() {
                             std::this_thread::sleep_until(scheduledStart);
                         }
 
-                        boost::asio::post(io_, [this, request = std::move(request), requestId]() mutable {
-                            try {
-                                executeRequest(std::move(request));
-                            } catch (const std::exception& ex) {
-                                util::log(util::LogLevel::error,
-                                          std::string{"处理待抢购请求时发生异常 id="} +
-                                              std::to_string(requestId) + " error=" + ex.what());
-                            }
-                        });
+                        try {
+                            // 直接在 worker 线程中继续执行请求，避免再次切换回 io_context
+                            // 线程导致一个请求同时占用两个线程；Workflow 会自行把结果投递回
+                            // io_context，所以这里无需额外的 post。
+                            executeRequest(std::move(request));
+                        } catch (const std::exception& ex) {
+                            util::log(util::LogLevel::error,
+                                      std::string{"处理待抢购请求时发生异常 id="} +
+                                          std::to_string(requestId) + " error=" + ex.what());
+                        }
                     } catch (const std::exception& ex) {
                         util::log(util::LogLevel::error,
                                   std::string{"调度请求线程失败 id="} + std::to_string(requestId) +
@@ -405,6 +406,9 @@ void GrabService::executeGrab(model::Request request) {
                   ", latency=" + std::to_string(adjustedFactor_.load()) +
                   ", processing=" + std::to_string(processingTime_) + ")");
 
+    // GrabWorkflow::run() 只会在当前线程上准备上下文并把任务交给 workflow 的 worker_
+    // 池。延时和后续的同步 I/O 都在单个 worker 线程上串行执行，完成后再切回
+    // io_context 线程触发回调，因此请求不会同时占用多个 worker 线程。
     workflow_->run(request, [this, request](const workflow::GrabResult& result) {
         handleResult(request, result);
     });

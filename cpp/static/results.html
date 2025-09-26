@@ -115,78 +115,92 @@
     </div>
 
 <script type="module">
-    // 使用 async 导入模块
-    const {showDetails, showModal, closeModal, formatJSON, openLink, copyToClipboard} =
-        await import('./js/modal-handler.js');
-    const {ListHandler, formatDateWithYear, getTypeText, getBuyerText} =
-        await import('./js/list-handler.js');
+    (async () => {
+        const [modalModule, listModule] = await Promise.all([
+            import('./js/modal-handler.js'),
+            import('./js/list-handler.js')
+        ]);
 
-    // 将这些函数暴露给全局作用域
-    Object.assign(window, {
-        showModal,
-        closeModal,
-        formatJSON,
-        openLink,
-        copyToClipboard,
-        getTypeText,
-        getBuyerText
-    });
+        const {
+            showDetails,
+            showModal,
+            closeModal,
+            formatJSON,
+            openLink,
+            copyToClipboard
+        } = modalModule;
+        const {
+            ListHandler,
+            formatDateWithoutYear,
+            formatDateWithYear,
+            getTypeText,
+            getBuyerText
+        } = listModule;
 
-    // 结果状态相关函数
-    function getResultStatusText(status) {
-        switch (status) {
-            case 1:
-                return '成功';
-            case 2:
-                return '失败';
-            case 3:
-                return '异常';
-            default:
-                return '未知';
-        }
-    }
-
-    function getResultStatusClass(status) {
-        switch (status) {
-            case 1:
-                return 'status-success';
-            case 2:
-                return 'status-failure';
-            case 3:
-                return 'status-exception';
-            default:
-                return '';
-        }
-    }
-
-    window.getResultStatusText = getResultStatusText;
-
-    // 设置showDetails函数
-    window.showDetails = (item) => showDetails(item, false, {
-        getTypeText: window.getTypeText,
-        getStatusText: window.getResultStatusText,
-        formatDateWithoutYear: window.formatDateWithoutYear,
-        getBuyerText: window.getBuyerText
+        Object.assign(window, {
+            showModal,
+            closeModal,
+            formatJSON,
+            openLink,
+            copyToClipboard,
+            getTypeText,
+            getBuyerText,
+            formatDateWithoutYear
         });
 
-    // 初始化列表处理器
-    const listHandler = new ListHandler({
-        containerId: 'resultsContainer',
-        fetchUrl: '/api/getResults',
-        isRequest: false,
-        getStatusText: getResultStatusText,
-        getStatusClass: getResultStatusClass,
-        getTypeText: getTypeText,
-        formatDate: formatDateWithYear
+        function getResultStatusText(status) {
+            switch (status) {
+                case 1:
+                    return '成功';
+                case 2:
+                    return '失败';
+                case 3:
+                    return '异常';
+                default:
+                    return '未知';
+            }
+        }
+
+        function getResultStatusClass(status) {
+            switch (status) {
+                case 1:
+                    return 'status-success';
+                case 2:
+                    return 'status-failure';
+                case 3:
+                    return 'status-exception';
+                default:
+                    return '';
+            }
+        }
+
+        window.getResultStatusText = getResultStatusText;
+
+        window.showDetails = (item) => showDetails(item, false, {
+            getTypeText,
+            getStatusText: getResultStatusText,
+            formatDateWithoutYear,
+            getBuyerText
         });
 
-    // 将重置和获取数据的函数暴露给全局
-    window.resetAndFetchResults = () => listHandler.resetAndFetch();
+        const listHandler = new ListHandler({
+            containerId: 'resultsContainer',
+            fetchUrl: '/api/getResults',
+            isRequest: false,
+            getStatusText: getResultStatusText,
+            getStatusClass: getResultStatusClass,
+            getTypeText,
+            formatDate: formatDateWithYear
+        });
 
-    // 页面加载完成后初始化
-    document.addEventListener('DOMContentLoaded', () => {
-        listHandler.resetAndFetch();
-    });
+        window.resetAndFetchResults = () => listHandler.resetAndFetch();
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => listHandler.resetAndFetch());
+        } else {
+            listHandler.resetAndFetch();
+        }
+    })();
 </script>
 </body>
 

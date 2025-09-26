@@ -116,78 +116,92 @@
 
 <!-- 将所有脚本移到 body 结束标签前 -->
 <script type="module">
-    // 使用 async 导入模块
-    const {showDetails, showModal, closeModal, formatJSON, openLink, copyToClipboard} =
-        await import('./js/modal-handler.js');
-    const {ListHandler, formatDateWithYear, getTypeText, getBuyerText} =
-        await import('./js/list-handler.js');
+    (async () => {
+        const [modalModule, listModule] = await Promise.all([
+            import('./js/modal-handler.js'),
+            import('./js/list-handler.js')
+        ]);
 
-    // 使用 Object.assign 简化全局函数暴露
-    Object.assign(window, {
-        showModal,
-        closeModal,
-        formatJSON,
-        openLink,
-        copyToClipboard,
-        getTypeText,
-        getBuyerText
-    });
+        const {
+            showDetails,
+            showModal,
+            closeModal,
+            formatJSON,
+            openLink,
+            copyToClipboard
+        } = modalModule;
+        const {
+            ListHandler,
+            formatDateWithoutYear,
+            formatDateWithYear,
+            getTypeText,
+            getBuyerText
+        } = listModule;
 
-    // 结果状态相关函数
-    function getRequestStatusText(status) {
-        switch (status) {
-            case 1:
-                return '等待';
-            case 2:
-                return '运行';
-            case 3:
-                return '停止';
-            default:
-                return '未知';
-        }
-    }
-
-    function getRequestStatusClass(status) {
-        switch (status) {
-            case 1:
-                return 'status-waiting';
-            case 2:
-                return 'status-running';
-            case 3:
-                return 'status-stopped';
-            default:
-                return '';
-        }
-    }
-
-    window.getRequestStatusText = getRequestStatusText;
-
-    // 设置showDetails函数
-    window.showDetails = (item) => showDetails(item, true, {
-        getTypeText: window.getTypeText,
-        getStatusText: window.getRequestStatusText,
-        formatDateWithoutYear: window.formatDateWithoutYear,
-        getBuyerText: window.getBuyerText
-    });
-
-    // 初始化列表处理器
-    const listHandler = new ListHandler({
-        containerId: 'requestsContainer',
-        fetchUrl: '/api/getRequests',
-        isRequest: true,
-        getStatusText: getRequestStatusText,
-        getStatusClass: getRequestStatusClass,
-        getTypeText: getTypeText,
-        formatDate: formatDateWithYear
-    });
-
-    // 将重置和获取数据的函数暴露给全局
-    window.resetAndFetchRequests = () => listHandler.resetAndFetch();
-
-    // 页面加载完成后初始化
-    document.addEventListener('DOMContentLoaded', () => {
-        listHandler.resetAndFetch();
+        Object.assign(window, {
+            showModal,
+            closeModal,
+            formatJSON,
+            openLink,
+            copyToClipboard,
+            getTypeText,
+            getBuyerText,
+            formatDateWithoutYear
         });
+
+        function getRequestStatusText(status) {
+            switch (status) {
+                case 1:
+                    return '等待';
+                case 2:
+                    return '运行';
+                case 3:
+                    return '停止';
+                default:
+                    return '未知';
+            }
+        }
+
+        function getRequestStatusClass(status) {
+            switch (status) {
+                case 1:
+                    return 'status-waiting';
+                case 2:
+                    return 'status-running';
+                case 3:
+                    return 'status-stopped';
+                default:
+                    return '';
+            }
+        }
+
+        window.getRequestStatusText = getRequestStatusText;
+
+        window.showDetails = (item) => showDetails(item, true, {
+            getTypeText,
+            getStatusText: getRequestStatusText,
+            formatDateWithoutYear,
+            getBuyerText
+        });
+
+        const listHandler = new ListHandler({
+            containerId: 'requestsContainer',
+            fetchUrl: '/api/getRequests',
+            isRequest: true,
+            getStatusText: getRequestStatusText,
+            getStatusClass: getRequestStatusClass,
+            getTypeText,
+            formatDate: formatDateWithYear
+        });
+
+        window.resetAndFetchRequests = () => listHandler.resetAndFetch();
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => listHandler.resetAndFetch());
+        } else {
+            listHandler.resetAndFetch();
+        }
+    })();
 </script>
 </body>
 

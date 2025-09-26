@@ -235,7 +235,7 @@ int main(int /*argc*/, char** /*argv*/) {
     controller::StatisticsController statisticsController{statisticsService};
     statisticsController.registerRoutes(*router);
 
-    controller::SubmitController submitController{grabService};
+    controller::SubmitController submitController{grabService, authService, httpClient};
     submitController.registerRoutes(*router);
 
     controller::ToolController toolController;

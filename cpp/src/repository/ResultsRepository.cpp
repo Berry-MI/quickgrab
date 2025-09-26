@@ -585,33 +585,33 @@ std::vector<ResultsRepository::AggregatedStats> ResultsRepository::getStatistics
     return stats;
 }
 
-std::vector<ResultsRepository::DailyStat> ResultsRepository::getDailyStats(const std::optional<int>& buyerId,
-                                                                           const std::optional<int>& status) {
+std::vector<ResultsRepository::DailyStat>
+ResultsRepository::getDailyStats(const std::optional<int>& buyerId,
+    const std::optional<int>& status) {
     std::vector<DailyStat> items;
     auto session = pool_.acquire();
     try {
         std::ostringstream sql;
-        sql << "SELECT dates.date AS date, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
-               "FROM (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date FROM seq_0_to_14) dates "
-               "LEFT JOIN results r ON DATE(r.start_time) = dates.date";
+        sql <<
+            "SELECT dates.date AS date, "
+            "       IFNULL(COUNT(r.id), 0) AS total, "
+            "       IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+            "FROM (SELECT DATE_SUB(CURDATE(), INTERVAL seq DAY) AS date FROM seq_0_to_14) dates "
+            "LEFT JOIN results r ON DATE(r.start_time) = dates.date";
+
         if (buyerId || status) {
-            sql << " AND 1=1";
+            if (buyerId) sql << " AND r.buyer_id = ?";
+            if (status)  sql << " AND r.status   = ?";
         }
-        if (buyerId) {
-            sql << " AND r.buyer_id = :buyerId";
-        }
-        if (status) {
-            sql << " AND r.status = :status";
-        }
+
         sql << " GROUP BY dates.date ORDER BY dates.date";
 
         auto stmt = session->sql(sql.str());
-        if (buyerId) {
-            stmt.bind("buyerId", *buyerId);
-        }
-        if (status) {
-            stmt.bind("status", *status);
-        }
+
+        // 按照在 SQL 中出现的顺序绑定参数
+        if (buyerId) stmt.bind(*buyerId);
+        if (status)  stmt.bind(*status);
+
         auto rows = stmt.execute();
         for (mysqlx::Row row : rows) {
             DailyStat stat{};
@@ -620,41 +620,48 @@ std::vector<ResultsRepository::DailyStat> ResultsRepository::getDailyStats(const
             stat.earnings = readDouble(row[2]);
             items.emplace_back(std::move(stat));
         }
-    } catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error, std::string{"查询每日统计失败: "} + err.what());
+    }
+    catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{ "查询每日统计失败: " } + err.what());
         throw;
     }
     return items;
 }
 
-std::vector<ResultsRepository::HourlyStat> ResultsRepository::getHourlyStats(const std::optional<int>& buyerId,
-                                                                             const std::optional<int>& status) {
+
+std::vector<ResultsRepository::HourlyStat>
+ResultsRepository::getHourlyStats(const std::optional<int>& buyerId,
+    const std::optional<int>& status) {
     std::vector<HourlyStat> items;
     auto session = pool_.acquire();
     try {
         std::ostringstream sql;
-        sql << "SELECT hours.hour AS hour, IFNULL(COUNT(r.id), 0) AS total, IFNULL(SUM(r.actual_earnings), 0) AS earnings "
-               "FROM (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL "
-               "SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL SELECT 15 UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours "
-               "LEFT JOIN results r ON HOUR(r.start_time) = hours.hour AND r.start_time >= NOW() - INTERVAL 1 DAY";
-        if (buyerId || status) {
-            sql << " AND 1=1";
-        }
+        sql <<
+            "SELECT hours.hour AS hour, "
+            "       IFNULL(COUNT(r.id), 0) AS total, "
+            "       IFNULL(SUM(r.actual_earnings), 0) AS earnings "
+            "FROM (SELECT 0 AS hour UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL "
+            "      SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL "
+            "      SELECT 10 UNION ALL SELECT 11 UNION ALL SELECT 12 UNION ALL SELECT 13 UNION ALL SELECT 14 UNION ALL "
+            "      SELECT 15 UNION ALL SELECT 16 UNION ALL SELECT 17 UNION ALL SELECT 18 UNION ALL SELECT 19 UNION ALL "
+            "      SELECT 20 UNION ALL SELECT 21 UNION ALL SELECT 22 UNION ALL SELECT 23) hours "
+            "LEFT JOIN results r "
+            "  ON HOUR(r.start_time) = hours.hour "
+            " AND r.start_time >= NOW() - INTERVAL 1 DAY";
+
         if (buyerId) {
-            sql << " AND r.buyer_id = :buyerId";
+            sql << " AND r.buyer_id = ?";
         }
         if (status) {
-            sql << " AND r.status = :status";
+            sql << " AND r.status = ?";
         }
+
         sql << " GROUP BY hours.hour ORDER BY hours.hour";
 
         auto stmt = session->sql(sql.str());
-        if (buyerId) {
-            stmt.bind("buyerId", *buyerId);
-        }
-        if (status) {
-            stmt.bind("status", *status);
-        }
+        if (buyerId) stmt.bind(*buyerId);  // 顺序必须与 ? 出现顺序一致
+        if (status)  stmt.bind(*status);
+
         auto rows = stmt.execute();
         for (mysqlx::Row row : rows) {
             HourlyStat stat{};
@@ -663,11 +670,13 @@ std::vector<ResultsRepository::HourlyStat> ResultsRepository::getHourlyStats(con
             stat.earnings = readDouble(row[2]);
             items.emplace_back(std::move(stat));
         }
-    } catch (const mysqlx::Error& err) {
-        util::log(util::LogLevel::error, std::string{"查询每小时统计失败: "} + err.what());
+    }
+    catch (const mysqlx::Error& err) {
+        util::log(util::LogLevel::error, std::string{ "查询每小时统计失败: " } + err.what());
         throw;
     }
     return items;
 }
+
 
 } // namespace quickgrab::repository

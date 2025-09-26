@@ -40,8 +40,7 @@ constexpr std::array<std::string_view, 11> kRetryKeywords{
     "啊哦~ 人潮拥挤，请稍后重试~",
     "请升级到最新版本后重试"};
 
-constexpr std::array<std::string_view, 13> kUpdateKeywords{
-    "不能购买自己店铺的商品",
+constexpr std::array<std::string_view, 12> kUpdateKeywords{
     "确认",
     "地址",
     "自提",
@@ -284,102 +283,62 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
     auto req = buildPost("https://" + ctx.domain + "/vbuy/CreateOrder/1.0", ctx, toQuery(requestBody));
     bool useProxy = ctx.useProxy;
     std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
+    const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
 
-    for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
-        const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
-        auto handleFailure = [&](const std::exception& ex) {
-            if (attempt == kMaxRetries) {
-                result.success = false;
-                result.error = ex.what();
-                result.message.clear();
-                return false;
+    try {
+        auto response = httpClient_.fetch(req,
+            affinity,
+            std::chrono::seconds{ 30 },
+            useProxy,
+            overrideProxy ? &*overrideProxy : nullptr);
+        result.statusCode = static_cast<int>(response.result());
+        auto json = quickgrab::util::parseJson(response.body());
+        result.response = json;
+        result.attempts = 1;
+
+        if (json.is_object()) {
+            const auto& obj = json.as_object();
+            if (auto* status = obj.if_contains("status"); status && status->is_object()) {
+                const auto& statusObj = status->as_object();
+                if (auto* description = statusObj.if_contains("description"); description && description->is_string()) {
+                    result.message = std::string(description->as_string());
+                }
+                if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                    result.statusCode = static_cast<int>(code->as_int64());
+                }
             }
-            static thread_local std::mt19937 rng{std::random_device{}()};
-            auto base = static_cast<int>(std::pow(2.0, attempt) * 100);
-            std::uniform_int_distribution<int> jitter(-base / 5, base / 5);
-            auto waitTime = std::chrono::milliseconds(base + jitter(rng));
-            std::this_thread::sleep_for(waitTime);
-            return true;
-        };
 
-        try {
-            auto response = httpClient_.fetch(req,
-                                             affinity,
-                                             std::chrono::seconds{30},
-                                             useProxy,
-                                             overrideProxy ? &*overrideProxy : nullptr);
-            result.statusCode = static_cast<int>(response.result());
-            auto json = quickgrab::util::parseJson(response.body());
-            result.response = json;
-            result.attempts = attempt + 1;
-            if (json.is_object()) {
-                const auto& obj = json.as_object();
-                if (auto* status = obj.if_contains("status"); status && status->is_object()) {
-                    const auto& statusObj = status->as_object();
-                    if (auto* description = statusObj.if_contains("description"); description && description->is_string()) {
-                        result.message = std::string(description->as_string());
-                    }
-                    if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
-                        result.statusCode = static_cast<int>(code->as_int64());
-                    }
-                }
-
-                result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
-                if (result.success) {
-                    result.shouldContinue = false;
-                    result.shouldUpdate = false;
-                    return result;
-                }
-
-                bool updateHint = containsKeyword(result.message, kUpdateKeywords) ||
-                                   (obj.if_contains("isUpdate") && obj.at("isUpdate").is_bool() && obj.at("isUpdate").as_bool());
-                bool retryHint = containsKeyword(result.message, kRetryKeywords) ||
-                                 (obj.if_contains("isContinue") && obj.at("isContinue").is_bool() && obj.at("isContinue").as_bool());
-
-                result.shouldUpdate = updateHint;
-                result.shouldContinue = retryHint || updateHint;
-                if (!result.shouldContinue) {
-                    return result;
-                }
-            } else {
-                result.message = "未知响应";
+            result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
+            if (result.success) {
                 result.shouldContinue = false;
+                result.shouldUpdate = false;
                 return result;
             }
-            return result;
-        } catch (const util::ProxyError& ex) {
-            util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
-            bool retried = false;
-            if (overrideProxy) {
-                util::log(util::LogLevel::info,
-                          std::string("CreateOrder proxy ") + overrideProxy->host + ":" +
-                              std::to_string(overrideProxy->port) + " failed with status " +
-                              std::to_string(ex.status()) + ", retrying with proxy pool or direct connection");
-                overrideProxy.reset();
-                retried = true;
-            } else if (useProxy) {
-                util::log(util::LogLevel::info,
-                          std::string("CreateOrder proxy request failed with status ") +
-                              std::to_string(ex.status()) + ", retrying without proxy");
-                useProxy = false;
-                retried = true;
-            }
-            if (retried) {
-                continue;
-            }
-            if (!handleFailure(ex)) {
-                return result;
-            }
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::warn, std::string{"CreateOrder attempt failed: "} + ex.what());
-            if (!handleFailure(ex)) {
-                return result;
-            }
+
+            bool updateHint = containsKeyword(result.message, kUpdateKeywords) ||
+                (obj.if_contains("isUpdate") && obj.at("isUpdate").is_bool() && obj.at("isUpdate").as_bool());
+            bool retryHint = containsKeyword(result.message, kRetryKeywords) ||
+                (obj.if_contains("isContinue") && obj.at("isContinue").is_bool() && obj.at("isContinue").as_bool());
+
+            result.shouldUpdate = updateHint;
+            result.shouldContinue = retryHint || updateHint;
         }
+        else {
+            result.message = "未知响应";
+            result.shouldContinue = false;
+        }
+
     }
-    result.error = "CreateOrder exhausted retries";
+    catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn, std::string{ "CreateOrder failed: " } + ex.what());
+        result.success = false;
+        result.error = ex.what();
+        result.message.clear();
+    }
+
     return result;
 }
+
 
 GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::json::object& payload) {
     GrabResult result;

@@ -239,79 +239,70 @@ std::optional<proxy::ProxyEndpoint> GrabService::fetchProxyForRequest(const mode
 
 void GrabService::processPending() {
     if (pendingDrainInFlight_.exchange(true)) {
-        util::log(util::LogLevel::debug,
-                  "Skipping pending drain; another drain is already in flight");
+        util::log(util::LogLevel::debug, "Skipping pending drain; another drain is already in flight");
         return;
     }
-
     auto guard = std::make_shared<DrainCompletionGuard>(pendingDrainInFlight_);
 
+    // 在 worker_ 上做数据库 I/O，避免阻塞 io_
     boost::asio::post(worker_, [this, guard]() mutable {
         try {
             auto pending = requests_.findPending(0);
             const auto now = std::chrono::system_clock::now();
 
             for (auto& request : pending) {
+                // 只触发“即将开始”的任务
                 const auto timeUntilStart = request.startTime - now;
                 if (timeUntilStart > kPendingTriggerWindow) {
                     continue;
                 }
 
+                // 标记为“执行中”
                 try {
                     requests_.updateStatus(request.id, 2);
-                } catch (const std::exception& ex) {
+                }
+                catch (const std::exception& ex) {
                     util::log(util::LogLevel::warn,
-                              std::string{"更新请求状态失败 id="} + std::to_string(request.id) +
-                                  " error=" + ex.what());
+                        "更新请求状态失败 id=" + std::to_string(request.id) + " error=" + ex.what());
                     continue;
                 }
 
-                const int requestId = request.id;
-                const auto scheduledStart = request.startTime;
-                const auto waitMillisHint = scheduledStart > now
-                                             ? std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                 scheduledStart - now)
-                                             : std::chrono::milliseconds::zero();
+                // 计算还需等待的毫秒数（<0 则为 0）
+                auto waitMs = std::max(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(request.startTime - std::chrono::system_clock::now()),
+                    std::chrono::milliseconds::zero()
+                ).count();
+
                 util::log(util::LogLevel::info,
-                          "请求 id=" + std::to_string(requestId) + " 将在 " +
-                              std::to_string(waitMillisHint.count()) + "ms 内启动处理");
+                    "请求 id=" + std::to_string(request.id) + " 将在 " + std::to_string(waitMs) + "ms 内启动处理");
 
-                auto scheduledRequest = std::move(request);
+                // 用 worker_ 的执行器创建定时器，避免阻塞线程
+                auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
+                timer->expires_after(std::chrono::milliseconds(waitMs));
 
-                boost::asio::post(worker_, [this, request = std::move(scheduledRequest), requestId, scheduledStart]() mutable {
-                    try {
-                        auto now = std::chrono::system_clock::now();
-                        if (scheduledStart > now) {
-                            const auto waitMillis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                scheduledStart - now);
-                            util::log(util::LogLevel::info,
-                                      "请求 id=" + std::to_string(requestId) + " 等待 " +
-                                          std::to_string(waitMillis.count()) + "ms 后执行");
-                            std::this_thread::sleep_until(scheduledStart);
-                        }
-
-                        try {
-                            // 直接在 worker 线程中继续执行请求，避免再次切换回 io_context
-                            // 线程导致一个请求同时占用两个线程；Workflow 会自行把结果投递回
-                            // io_context，所以这里无需额外的 post。
-                            executeRequest(std::move(request));
-                        } catch (const std::exception& ex) {
-                            util::log(util::LogLevel::error,
-                                      std::string{"处理待抢购请求时发生异常 id="} +
-                                          std::to_string(requestId) + " error=" + ex.what());
-                        }
-                    } catch (const std::exception& ex) {
-                        util::log(util::LogLevel::error,
-                                  std::string{"调度请求线程失败 id="} + std::to_string(requestId) +
-                                      " error=" + ex.what());
+                // 捕获 request 的移动副本到回调里
+                auto scheduled = std::make_shared<model::Request>(std::move(request));
+                timer->async_wait([this, timer, scheduled](const boost::system::error_code& ec) mutable {
+                    if (ec) {
+                        util::log(util::LogLevel::warn,
+                            "启动定时器被取消 id=" + std::to_string(scheduled->id) + " err=" + ec.message());
+                        return;
                     }
-                });
+                    // 直接在 worker 线程继续执行，整个生命周期不占用第二个线程
+                    try {
+                        executeRequest(std::move(*scheduled));
+                    }
+                    catch (const std::exception& ex) {
+                        util::log(util::LogLevel::error,
+                            "处理待抢购请求时异常 id=" + std::to_string(scheduled->id) + " error=" + ex.what());
+                    }
+                    });
             }
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::error,
-                      std::string{"查找待抢购请求时发生异常: "} + ex.what());
         }
-    });
+        catch (const std::exception& ex) {
+            util::log(util::LogLevel::error, std::string{ "查找待抢购请求时发生异常: " } + ex.what());
+        }
+        });
 }
 
 std::optional<int> GrabService::handleRequest(const model::Request& request) {

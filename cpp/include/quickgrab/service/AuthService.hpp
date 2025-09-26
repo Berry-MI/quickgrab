@@ -40,6 +40,10 @@ public:
 
     void logout(const std::string& token);
 
+    std::optional<SessionInfo> touchSession(const std::string& token);
+
+    std::string buildSessionCookie(const SessionInfo& session) const;
+
     std::optional<model::Buyer> getBuyerByToken(const std::string& token);
 
 private:

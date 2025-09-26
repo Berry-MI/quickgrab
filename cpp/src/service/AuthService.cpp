@@ -108,7 +108,7 @@ void AuthService::logout(const std::string& token) {
     sessions_.erase(token);
 }
 
-std::optional<model::Buyer> AuthService::getBuyerByToken(const std::string& token) {
+std::optional<AuthService::SessionInfo> AuthService::touchSession(const std::string& token) {
     if (token.empty()) {
         return std::nullopt;
     }
@@ -127,7 +127,37 @@ std::optional<model::Buyer> AuthService::getBuyerByToken(const std::string& toke
         return std::nullopt;
     }
 
-    return it->second.buyer;
+    const auto ttl = it->second.rememberMe ? rememberTtl_ : defaultTtl_;
+    it->second.expiresAt = now + ttl;
+
+    SessionInfo sessionInfo;
+    sessionInfo.token = token;
+    sessionInfo.buyer = it->second.buyer;
+    sessionInfo.expiresAt = it->second.expiresAt;
+    sessionInfo.rememberMe = it->second.rememberMe;
+    return sessionInfo;
+}
+
+std::string AuthService::buildSessionCookie(const SessionInfo& session) const {
+    std::ostringstream oss;
+    oss << kSessionCookie << '=' << session.token << "; Path=/; HttpOnly; SameSite=Lax";
+    if (session.rememberMe) {
+        auto now = std::chrono::system_clock::now();
+        auto ttl = std::chrono::duration_cast<std::chrono::seconds>(session.expiresAt - now);
+        if (ttl.count() < 0) {
+            ttl = std::chrono::seconds{0};
+        }
+        oss << "; Max-Age=" << ttl.count();
+    }
+    return oss.str();
+}
+
+std::optional<model::Buyer> AuthService::getBuyerByToken(const std::string& token) {
+    auto session = touchSession(token);
+    if (!session) {
+        return std::nullopt;
+    }
+    return session->buyer;
 }
 
 std::string AuthService::generateToken() {

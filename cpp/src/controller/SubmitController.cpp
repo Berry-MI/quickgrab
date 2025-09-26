@@ -1,5 +1,6 @@
 #include "quickgrab/controller/SubmitController.hpp"
 
+#include "quickgrab/model/Buyer.hpp"
 #include "quickgrab/model/Request.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
@@ -9,11 +10,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <ctime>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace quickgrab::controller {
 namespace {
@@ -51,10 +55,13 @@ boost::json::object ensureJsonObject(const boost::json::value& value) {
     return {};
 }
 
-boost::json::object makeStatus(int code, std::string description) {
+boost::json::object makeStatus(int code, std::string message, std::string description = {}) {
     boost::json::object status;
     status["code"] = code;
-    status["description"] = std::move(description);
+    status["message"] = std::move(message);
+    if (!description.empty()) {
+        status["description"] = std::move(description);
+    }
     return status;
 }
 
@@ -255,16 +262,88 @@ long extractNetworkDelay(const boost::json::object& request) {
     return 0;
 }
 
+boost::json::object buyerToJson(const model::Buyer& buyer) {
+    boost::json::object obj;
+    obj["id"] = buyer.id;
+    obj["username"] = buyer.username;
+    obj["email"] = buyer.email;
+    obj["accessLevel"] = buyer.accessLevel;
+    return obj;
+}
+
+std::unordered_map<std::string, std::string> parseCookies(const std::string& header) {
+    std::unordered_map<std::string, std::string> cookies;
+    std::size_t start = 0;
+    while (start < header.size()) {
+        auto end = header.find(';', start);
+        if (end == std::string::npos) {
+            end = header.size();
+        }
+        auto pair = header.substr(start, end - start);
+        auto eq = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string key = pair.substr(0, eq);
+            std::string value = pair.substr(eq + 1);
+            auto trim = [](std::string str) {
+                auto begin = std::find_if_not(str.begin(), str.end(), [](unsigned char ch) { return std::isspace(ch); });
+                auto endIt =
+                    std::find_if_not(str.rbegin(), str.rend(), [](unsigned char ch) { return std::isspace(ch); }).base();
+                if (begin >= endIt) {
+                    return std::string{};
+                }
+                return std::string(begin, endIt);
+            };
+            cookies.emplace(trim(std::move(key)), trim(std::move(value)));
+        }
+        start = end + 1;
+    }
+    return cookies;
+}
+
+void sendUnauthorized(quickgrab::server::RequestContext& ctx) {
+    auto status = makeStatus(401, "ERROR", "未登录");
+    auto response = wrapResponse(std::move(status), {});
+    sendJsonResponse(ctx, boost::beast::http::status::unauthorized, response);
+}
+
+std::optional<service::AuthService::SessionInfo> authenticateRequest(service::AuthService& authService,
+                                                                     quickgrab::server::RequestContext& ctx) {
+    std::string token;
+    if (auto header = ctx.request.find(boost::beast::http::field::cookie); header != ctx.request.end()) {
+        auto cookies = parseCookies(std::string(header->value()));
+        if (auto it = cookies.find(std::string(service::AuthService::kSessionCookie)); it != cookies.end()) {
+            token = it->second;
+        }
+    }
+
+    if (token.empty()) {
+        return std::nullopt;
+    }
+
+    return authService.touchSession(token);
+}
+
 } // namespace
 
-SubmitController::SubmitController(service::GrabService& grabService)
-    : grabService_(grabService) {}
+SubmitController::SubmitController(service::GrabService& grabService, service::AuthService& authService)
+    : grabService_(grabService)
+    , authService_(authService) {}
 
 void SubmitController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/submitRequest", [this](auto& ctx) { handleSubmitRequest(ctx); });
 }
 
 void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ctx) {
+    auto session = authenticateRequest(authService_, ctx);
+    if (!session) {
+        sendUnauthorized(ctx);
+        return;
+    }
+
+    if (session->rememberMe) {
+        ctx.response.set(boost::beast::http::field::set_cookie, authService_.buildSessionCookie(*session));
+    }
+
     try {
         auto json = boost::json::parse(ctx.request.body());
         if (!json.is_object()) {
@@ -272,6 +351,7 @@ void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ct
         }
 
         auto payload = sanitizeRequestPayload(json.as_object());
+        payload["buyerId"] = session->buyer.id;
         auto requestModel = buildRequestModel(payload);
 
         auto insertedId = grabService_.handleRequest(requestModel);
@@ -285,11 +365,12 @@ void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ct
         boost::json::object result;
         result["networkDelay"] = networkDelay;
         result["request"] = payload;
+        result["user"] = buyerToJson(session->buyer);
 
         auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
         sendJsonResponse(ctx, boost::beast::http::status::ok, response);
     } catch (const std::exception& ex) {
-        auto response = wrapResponse(makeStatus(400, ex.what()), {});
+        auto response = wrapResponse(makeStatus(400, "ERROR", ex.what()), {});
         sendJsonResponse(ctx, boost::beast::http::status::bad_request, response);
     }
 }

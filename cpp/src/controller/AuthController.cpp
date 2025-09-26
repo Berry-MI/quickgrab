@@ -93,20 +93,6 @@ void sendJsonResponse(quickgrab::server::RequestContext& ctx,
     ctx.response.prepare_payload();
 }
 
-std::string buildSessionCookie(const service::AuthService::SessionInfo& session) {
-    std::ostringstream oss;
-    oss << service::AuthService::kSessionCookie << '=' << session.token << "; Path=/; HttpOnly; SameSite=Lax";
-    if (session.rememberMe) {
-        auto now = std::chrono::system_clock::now();
-        auto ttl = std::chrono::duration_cast<std::chrono::seconds>(session.expiresAt - now);
-        if (ttl.count() < 0) {
-            ttl = std::chrono::seconds{0};
-        }
-        oss << "; Max-Age=" << ttl.count();
-    }
-    return oss.str();
-}
-
 std::string buildExpiredCookie() {
     std::ostringstream oss;
     oss << service::AuthService::kSessionCookie << "=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax";
@@ -145,7 +131,7 @@ void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {
         return;
     }
 
-    ctx.response.set(boost::beast::http::field::set_cookie, buildSessionCookie(*authResult.session));
+    ctx.response.set(boost::beast::http::field::set_cookie, authService_.buildSessionCookie(*authResult.session));
 
     boost::json::object payload{{"status", "success"},
                                 {"message", "Login successful"},

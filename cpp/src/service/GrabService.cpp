@@ -43,6 +43,7 @@ namespace {
 
 constexpr std::chrono::milliseconds kProxyProbeTimeout{1500};
 constexpr int kMaxProxyThreads{8};
+constexpr std::chrono::seconds kPendingTriggerWindow{30};
 
 bool parseBoolValue(const boost::json::value& value) {
     if (value.is_bool()) {
@@ -247,17 +248,64 @@ void GrabService::processPending() {
 
     boost::asio::post(worker_, [this, guard]() mutable {
         try {
-            auto pending = requests_.findPending(50);
-            boost::asio::post(io_, [this, guard, pending = std::move(pending)]() mutable {
-                try {
-                    for (auto& request : pending) {
-                        executeRequest(std::move(request));
-                    }
-                } catch (const std::exception& ex) {
-                    util::log(util::LogLevel::error,
-                              std::string{"处理待抢购请求时发生异常: "} + ex.what());
+            auto pending = requests_.findPending(0);
+            const auto now = std::chrono::system_clock::now();
+
+            for (auto& request : pending) {
+                const auto timeUntilStart = request.startTime - now;
+                if (timeUntilStart > kPendingTriggerWindow) {
+                    continue;
                 }
-            });
+
+                try {
+                    requests_.updateStatus(request.id, 2);
+                } catch (const std::exception& ex) {
+                    util::log(util::LogLevel::warn,
+                              std::string{"更新请求状态失败 id="} + std::to_string(request.id) +
+                                  " error=" + ex.what());
+                    continue;
+                }
+
+                const int requestId = request.id;
+                const auto scheduledStart = request.startTime;
+                const auto waitMillisHint = scheduledStart > now
+                                             ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                 scheduledStart - now)
+                                             : std::chrono::milliseconds::zero();
+                util::log(util::LogLevel::info,
+                          "请求 id=" + std::to_string(requestId) + " 将在 " +
+                              std::to_string(waitMillisHint.count()) + "ms 内启动处理");
+
+                auto scheduledRequest = std::move(request);
+
+                boost::asio::post(worker_, [this, request = std::move(scheduledRequest), requestId, scheduledStart]() mutable {
+                    try {
+                        auto now = std::chrono::system_clock::now();
+                        if (scheduledStart > now) {
+                            const auto waitMillis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                scheduledStart - now);
+                            util::log(util::LogLevel::info,
+                                      "请求 id=" + std::to_string(requestId) + " 等待 " +
+                                          std::to_string(waitMillis.count()) + "ms 后执行");
+                            std::this_thread::sleep_until(scheduledStart);
+                        }
+
+                        boost::asio::post(io_, [this, request = std::move(request), requestId]() mutable {
+                            try {
+                                executeRequest(std::move(request));
+                            } catch (const std::exception& ex) {
+                                util::log(util::LogLevel::error,
+                                          std::string{"处理待抢购请求时发生异常 id="} +
+                                              std::to_string(requestId) + " error=" + ex.what());
+                            }
+                        });
+                    } catch (const std::exception& ex) {
+                        util::log(util::LogLevel::error,
+                                  std::string{"调度请求线程失败 id="} + std::to_string(requestId) +
+                                      " error=" + ex.what());
+                    }
+                });
+            }
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::error,
                       std::string{"查找待抢购请求时发生异常: "} + ex.what());

@@ -2,6 +2,7 @@
 
 #include "quickgrab/model/Buyer.hpp"
 #include "quickgrab/model/Request.hpp"
+#include "quickgrab/util/HttpClient.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
@@ -18,9 +19,125 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace quickgrab::controller {
 namespace {
+
+constexpr char kDesktopUA[] =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76";
+
+boost::json::object makeDefaultUserInfo() {
+    return { {"nickName", "未知"},
+             {"telephone", "未知"},
+             {"sex", "未知"},
+             {"province", "未知"},
+             {"headImage", ""} };
+}
+
+std::string readNestedText(const boost::json::value* node, const char* key) {
+    if (!node || !node->is_object()) {
+        return {};
+    }
+    const auto& obj = node->as_object();
+    if (auto it = obj.if_contains(key); it && it->is_string()) {
+        return std::string(it->as_string().c_str());
+    }
+    return {};
+}
+
+std::optional<boost::json::object> fetchUserInfo(util::HttpClient& httpClient, const std::string& cookies) {
+    std::vector<util::HttpClient::Header> headers{
+        {"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+        {"Cookie", cookies},
+        {"Referer", "https://weidian.com/"},
+        {"User-Agent", kDesktopUA},
+    };
+
+    try {
+        auto response = httpClient.fetch("GET",
+                                         "https://thor.weidian.com/udccore/udc.user.getUserInfoById/1.0?param=%7B%7D",
+                                         headers,
+                                         "",
+                                         cookies,
+                                         std::chrono::seconds{30});
+
+        if (response.result_int() >= 400) {
+            util::log(util::LogLevel::warn,
+                      "getUserInfo 返回错误状态: " + std::to_string(response.result_int()));
+            return makeDefaultUserInfo();
+        }
+
+        boost::json::value parsed;
+        try {
+            parsed = boost::json::parse(response.body());
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn, std::string{"解析 getUserInfo 响应失败: "} + ex.what());
+            return makeDefaultUserInfo();
+        }
+
+        if (!parsed.is_object()) {
+            util::log(util::LogLevel::warn, "getUserInfo 响应不是 JSON 对象");
+            return makeDefaultUserInfo();
+        }
+
+        auto info = makeDefaultUserInfo();
+        const auto& obj = parsed.as_object();
+        bool ok = false;
+
+        if (auto status = obj.if_contains("status"); status && status->is_object()) {
+            const auto& statusObj = status->as_object();
+            int code = -1;
+            if (auto codeIt = statusObj.if_contains("code"); codeIt && codeIt->is_int64()) {
+                code = static_cast<int>(codeIt->as_int64());
+            }
+            std::string message;
+            if (auto msgIt = statusObj.if_contains("message"); msgIt && msgIt->is_string()) {
+                message = std::string(msgIt->as_string().c_str());
+            }
+            ok = (code == 0) && (message.empty() || message == "OK");
+            if (!ok) {
+                util::log(util::LogLevel::warn,
+                          "getUserInfo 状态异常: code=" + std::to_string(code) + ", message=" + message);
+            }
+        }
+
+        if (ok) {
+            const boost::json::value* resultNode = obj.if_contains("result");
+            const boost::json::value* basicNode = nullptr;
+            const boost::json::value* phoneNode = nullptr;
+            const boost::json::value* wechatNode = nullptr;
+
+            if (resultNode && resultNode->is_object()) {
+                const auto& resultObj = resultNode->as_object();
+                basicNode = resultObj.if_contains("basic");
+                phoneNode = resultObj.if_contains("phone");
+                wechatNode = resultObj.if_contains("wechat");
+            }
+
+            if (auto nick = readNestedText(basicNode, "nickName"); !nick.empty()) {
+                info["nickName"] = nick;
+            }
+            if (auto head = readNestedText(basicNode, "headImage"); !head.empty()) {
+                info["headImage"] = head;
+            }
+            if (auto phone = readNestedText(phoneNode, "telephone"); !phone.empty()) {
+                info["telephone"] = phone;
+            }
+            if (auto sex = readNestedText(wechatNode, "sex"); !sex.empty()) {
+                info["sex"] = sex;
+            }
+            if (auto province = readNestedText(wechatNode, "province"); !province.empty()) {
+                info["province"] = province;
+            }
+        }
+
+        return info;
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::error, std::string{"调用 getUserInfo 失败: "} + ex.what());
+        return std::nullopt;
+    }
+}
 
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,
                       boost::beast::http::status status,
@@ -325,9 +442,12 @@ std::optional<service::AuthService::SessionInfo> authenticateRequest(service::Au
 
 } // namespace
 
-SubmitController::SubmitController(service::GrabService& grabService, service::AuthService& authService)
+SubmitController::SubmitController(service::GrabService& grabService,
+                                   service::AuthService& authService,
+                                   util::HttpClient& httpClient)
     : grabService_(grabService)
-    , authService_(authService) {}
+    , authService_(authService)
+    , httpClient_(httpClient) {}
 
 void SubmitController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/submitRequest", [this](auto& ctx) { handleSubmitRequest(ctx); });
@@ -350,7 +470,25 @@ void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ct
             throw std::invalid_argument("请求必须是JSON对象");
         }
 
-        auto payload = sanitizeRequestPayload(json.as_object());
+        auto payload = json.as_object();
+
+        auto cookies = readString(payload, "cookies");
+        auto userInfo = fetchUserInfo(httpClient_, cookies);
+        if (!userInfo) {
+            auto response = wrapResponse(makeStatus(202, "ERROR", "获取用户信息失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, response);
+            return;
+        }
+
+        if (auto it = payload.if_contains("userInfo")) {
+            auto overrides = ensureJsonObject(*it);
+            for (auto& field : overrides) {
+                (*userInfo)[std::string(field.key())] = field.value();
+            }
+        }
+
+        payload["userInfo"] = std::move(*userInfo);
+        payload = sanitizeRequestPayload(std::move(payload));
         payload["buyerId"] = session->buyer.id;
         auto requestModel = buildRequestModel(payload);
 

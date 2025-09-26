@@ -48,21 +48,78 @@ bool loadCertificateBundle(boost::asio::ssl::context& context, const std::filesy
 }
 
 bool configureSslTrustStore(boost::asio::ssl::context& context) {
-    const std::filesystem::path certPath = std::filesystem::path("../../data/cacert.pem");
+    bool trustConfigured = false;
 
-    if (!std::filesystem::exists(certPath)) {
-        throw std::runtime_error("CA 证书文件不存在: " + certPath.string());
+    try {
+        context.set_default_verify_paths();
+        log(LogLevel::info, "已加载系统默认证书目录");
+        trustConfigured = true;
+    } catch (const std::exception& ex) {
+        log(LogLevel::warn,
+            std::string("加载系统默认证书目录失败: ") + ex.what());
     }
 
-    if (!loadCertificateBundle(context, certPath)) {
-        throw std::runtime_error("加载 CA 证书失败: " + certPath.string());
+    std::vector<std::filesystem::path> candidates;
+    auto emplaceUnique = [&candidates](const std::filesystem::path& path) {
+        if (path.empty()) {
+            return;
+        }
+        if (std::find(candidates.begin(), candidates.end(), path) == candidates.end()) {
+            candidates.push_back(path);
+        }
+    };
+
+    auto addEnvCandidate = [&](const char* name) {
+        if (const char* value = std::getenv(name); value && *value) {
+            emplaceUnique(std::filesystem::path(value));
+        }
+    };
+
+    addEnvCandidate("QUICKGRAB_CACERT");
+    addEnvCandidate("CURL_CA_BUNDLE");
+    addEnvCandidate("SSL_CERT_FILE");
+
+    if (const char* home = std::getenv("QUICKGRAB_HOME"); home && *home) {
+        std::filesystem::path homePath(home);
+        emplaceUnique(homePath / "cacert.pem");
+        emplaceUnique(homePath / "data" / "cacert.pem");
+    }
+
+    const std::filesystem::path sourceRoot = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    emplaceUnique(sourceRoot / "cacert.pem");
+    const auto cppRoot = sourceRoot / "cpp";
+    emplaceUnique(sourceRoot / "data" / "cacert.pem");
+    emplaceUnique(cppRoot / "cacert.pem");
+    emplaceUnique(cppRoot / "data" / "cacert.pem");
+
+    std::error_code ec;
+    const std::filesystem::path current = std::filesystem::current_path(ec);
+    if (!ec) {
+        emplaceUnique(current / "cacert.pem");
+        emplaceUnique(current / "data" / "cacert.pem");
+        const auto parent = current.parent_path();
+        if (!parent.empty()) {
+            emplaceUnique(parent / "cacert.pem");
+            emplaceUnique(parent / "data" / "cacert.pem");
+        }
+    }
+
+    for (const auto& candidate : candidates) {
+        if (loadCertificateBundle(context, candidate)) {
+            trustConfigured = true;
+            break;
+        }
+    }
+
+    if (!trustConfigured) {
+        throw std::runtime_error(
+            "未能加载任何 CA 证书，请通过 QUICKGRAB_CACERT/CURL_CA_BUNDLE/SSL_CERT_FILE "
+            "或 QUICKGRAB_HOME 指向包含 curl cacert.pem 的目录");
     }
 
     context.set_verify_mode(boost::asio::ssl::verify_peer);
     return true;
 }
-
-
 
 template <typename Stream>
 void configureTlsStream(Stream& stream, const std::string& host, bool verifyCertificates) {
@@ -304,56 +361,58 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
                 auto proxyResults = resolver.resolve(proxyPtr->host, std::to_string(proxyPtr->port));
 
                 if (parsed.scheme == "https") {
-                    boost::beast::ssl_stream<boost::beast::tcp_stream> stream(io_, sslContext_);
-                    auto& lowest = boost::beast::get_lowest_layer(stream);
-                    lowest.expires_after(timeout);
-                    lowest.connect(proxyResults);
+                    boost::beast::tcp_stream proxyStream(io_);
+                    proxyStream.expires_after(timeout);
+                    proxyStream.connect(proxyResults);
 
                     boost::beast::http::request<boost::beast::http::empty_body> connectRequest{
                         boost::beast::http::verb::connect, authorityFrom(parsed), kHttpVersion};
                     connectRequest.set(boost::beast::http::field::host, authorityFrom(parsed));
-                    connectRequest.set(boost::beast::http::field::user_agent, "quickgrab-http-client/1.0");
+                    connectRequest.set(boost::beast::http::field::user_agent, "asio-beast-proxy-sample/1.0");
                     connectRequest.set(boost::beast::http::field::connection, "keep-alive");
-                    connectRequest.keep_alive(true);
                     if (auto auth = proxyAuthorization(*proxyPtr); !auth.empty()) {
                         connectRequest.set("Proxy-Authorization", auth);
                     }
 
-                    boost::beast::http::write(lowest, connectRequest);
+                    boost::beast::http::write(proxyStream, connectRequest);
+
                     boost::beast::flat_buffer connectBuffer;
                     boost::beast::http::response_parser<boost::beast::http::string_body> connectParser;
                     connectParser.body_limit(64 * 1024);
-                    // connectParser.skip(true); // 删掉
+                    connectParser.skip(true);
+                    boost::beast::http::read(proxyStream, connectBuffer, connectParser);
 
-                    boost::beast::http::read(lowest, connectBuffer, connectParser);
                     const auto& connectResponse = connectParser.get();
                     if (connectResponse.result() != boost::beast::http::status::ok &&
                         connectResponse.result() != boost::beast::http::status::no_content) {
-                        util::log(util::LogLevel::warn,
-                            "CONNECT failed, status=" + std::to_string(connectResponse.result_int()) +
-                            ", body=" + connectResponse.body());
                         throw ProxyError(ProxyError::Type::connect_failed,
-                            connectResponse.result_int(),
-                            "Proxy CONNECT failed with status " +
-                            std::to_string(connectResponse.result_int()));
+                                         connectResponse.result_int(),
+                                         "Proxy CONNECT failed with status " +
+                                             std::to_string(connectResponse.result_int()));
                     }
 
-                    configureTlsStream(stream, parsed.host, verifyCertificates_);
+                    boost::beast::ssl_stream<boost::beast::tcp_stream&> tlsStream{proxyStream, sslContext_};
+                    configureTlsStream(tlsStream, parsed.host, verifyCertificates_);
 
-                    lowest.expires_after(timeout);
-                    stream.handshake(boost::asio::ssl::stream_base::client);
+                    proxyStream.expires_after(timeout);
+                    tlsStream.handshake(boost::asio::ssl::stream_base::client);
 
-                    boost::beast::http::write(stream, request);
+                    boost::beast::http::write(tlsStream, request);
                     boost::beast::flat_buffer buffer;
                     HttpResponse response;
-                    boost::beast::http::read(stream, buffer, response);
+                    boost::beast::http::read(tlsStream, buffer, response);
 
                     boost::system::error_code ec;
-                    stream.shutdown(ec);
+                    tlsStream.shutdown(ec);
                     if (ec == boost::asio::error::eof || ec == boost::asio::ssl::error::stream_truncated) {
                         ec = {};
                     }
                     if (ec) {
+                        throw boost::system::system_error(ec);
+                    }
+
+                    proxyStream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+                    if (ec && ec != boost::asio::error::not_connected) {
                         throw boost::system::system_error(ec);
                     }
 
@@ -440,7 +499,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             }
             util::log(util::LogLevel::warn,
                       "Proxy attempt " + std::to_string(attempt + 1) + "/" +
-                         
+                          std::to_string(std::max(1u, proxyAttemptLimit)) +
                           " failed with status " + std::to_string(ex.status()) +
                           ": " + ex.what());
             lastException = std::current_exception();
@@ -452,7 +511,7 @@ HttpClient::HttpResponse HttpClient::fetch(HttpRequest request,
             }
             util::log(util::LogLevel::warn,
                       "Proxy attempt " + std::to_string(attempt + 1) + "/" +
-                          
+                          std::to_string(std::max(1u, proxyAttemptLimit)) +
                           " failed: " + ex.what());
             lastException = std::current_exception();
             continue;

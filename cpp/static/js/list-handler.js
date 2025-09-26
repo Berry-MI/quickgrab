@@ -145,7 +145,7 @@ class ListHandler {
         const fragment = document.createDocumentFragment();
 
         data.forEach((item, index) => {
-            const userInfo = item.userInfo;
+            const userInfo = item.userInfo || {};
             const statusText = this.options.getStatusText(item.status);
             const typeText = this.options.getTypeText(item.type);
 
@@ -153,9 +153,12 @@ class ListHandler {
             const itemIndex = this.offset + index + 1;
 
             // 处理昵称和订单备注的显示
-            const nickNameDisplay = userInfo.orderNote
-                ? `${userInfo.nickName}-${userInfo.orderNote}`
-                : userInfo.nickName;
+            const nickName = userInfo.nickName || '未知';
+            const orderNote = userInfo.orderNote;
+            const telephone = userInfo.telephone || '未知';
+            const nickNameDisplay = orderNote
+                ? `${nickName}-${orderNote}`
+                : nickName;
 
             const itemElement = document.createElement('div');
             itemElement.className = 'result-item';
@@ -165,7 +168,7 @@ class ListHandler {
                     <div class="item-index">${itemIndex}</div>
                     <div class="item-content">
                         <div class="info">
-                            <span class="telephone-nickName">${userInfo.telephone} (${nickNameDisplay})</span>
+                            <span class="telephone-nickName">${telephone} (${nickNameDisplay})</span>
                             <span class="status-indicator ${this.options.getStatusClass(item.status)}">${statusText}</span>
                         </div>
                         <div class="info">

@@ -292,6 +292,7 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
             useProxy,
             overrideProxy ? &*overrideProxy : nullptr);
         result.statusCode = static_cast<int>(response.result());
+
         auto json = quickgrab::util::parseJson(response.body());
         result.response = json;
         result.attempts = 1;
@@ -301,7 +302,10 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
             if (auto* status = obj.if_contains("status"); status && status->is_object()) {
                 const auto& statusObj = status->as_object();
                 if (auto* description = statusObj.if_contains("description"); description && description->is_string()) {
-                    result.message = std::string(description->as_string());
+                    result.description = std::string(description->as_string());
+                }
+                if (auto* message = statusObj.if_contains("message"); message && message->is_string()) {
+                    result.message = std::string(message->as_string());
                 }
                 if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
                     result.statusCode = static_cast<int>(code->as_int64());
@@ -309,7 +313,7 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
             }
 
             result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
-            if (result.success) {
+            if (result.success||result.message == "OK") {
                 result.shouldContinue = false;
                 result.shouldUpdate = false;
                 return result;
@@ -491,7 +495,6 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
     }
 
     auto dataObj = fetchAddOrderData(ctx);
-	std::cout << "dataObj = " << (dataObj ? boost::json::serialize(*dataObj) : "null") << std::endl;
     if (!dataObj) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 无法获取下单数据，将尝试使用已有参数");
@@ -518,8 +521,7 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
 
     ctx.request.orderParameters = *orderParams;
     ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(*orderParams);
-    util::log(util::LogLevel::info,
-              "请求ID=" + std::to_string(ctx.request.id) + " 重新生成订单参数成功");
+
 }
 
 std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabContext& ctx) const {

@@ -24,6 +24,7 @@ struct GrabResult {
     bool shouldContinue{};
     boost::json::value response;
     std::string message;
+    std::string description{};
     std::string error;
     int statusCode{};
     int attempts{};

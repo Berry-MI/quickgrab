@@ -367,6 +367,7 @@ ResultsRepository::ResultsRepository(MySqlConnectionPool& pool)
     : pool_(pool) {}
 
 void ResultsRepository::insertResult(const model::Result& result) {
+
     auto session = pool_.acquire();
     try {
         mysqlx::Schema schema = session->getSchema(pool_.schemaName());

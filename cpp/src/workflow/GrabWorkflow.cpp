@@ -312,8 +312,21 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
                 }
             }
 
-            result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
-            if (result.success||result.message == "OK") {
+            bool success = false;
+            if (auto* isSuccess = obj.if_contains("isSuccess"); isSuccess && isSuccess->is_int64()) {
+                success = isSuccess->as_int64() == 1;
+            }
+            if (!success) {
+                if (auto* status = obj.if_contains("status"); status && status->is_object()) {
+                    const auto& statusObj = status->as_object();
+                    if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                        success = code->as_int64() == 0;
+                    }
+                }
+            }
+
+            result.success = success;
+            if (result.success) {
                 result.shouldContinue = false;
                 result.shouldUpdate = false;
                 return result;
@@ -351,14 +364,29 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
     bool useProxy = ctx.useProxy;
     std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
 
+    std::string lastError;
+    auto waitWithJitter = [](int attemptIndex) {
+        long baseDelay = static_cast<long>(std::pow(2.0, attemptIndex) * 80);
+        baseDelay = std::max<long>(50, baseDelay);
+        long jitterRange = baseDelay / 5;
+        if (jitterRange > 0) {
+            static thread_local std::mt19937 rng{std::random_device{}()};
+            std::uniform_int_distribution<long> dist(-jitterRange, jitterRange);
+            baseDelay += dist(rng);
+        }
+        return std::chrono::milliseconds(baseDelay);
+    };
+
     for (int attempt = 0; attempt <= kMaxRetries; ++attempt) {
         const std::string& affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
-        auto handleFailure = [&](const std::exception& ex) {
+        auto scheduleRetry = [&](std::string_view errorMessage) {
             if (attempt == kMaxRetries) {
-                result.error = ex.what();
+                if (!errorMessage.empty() && result.error.empty()) {
+                    result.error = std::string(errorMessage);
+                }
                 return false;
             }
-            auto waitTime = std::chrono::milliseconds(static_cast<int>(std::pow(2.0, attempt) * 80));
+            auto waitTime = waitWithJitter(attempt + 1);
             std::this_thread::sleep_for(waitTime);
             return true;
         };
@@ -372,10 +400,69 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
             result.statusCode = static_cast<int>(response.result());
             auto json = quickgrab::util::parseJson(response.body());
             result.attempts = attempt + 1;
-            if (json.is_object() && json.as_object().if_contains("result")) {
-                result.response = json.as_object().at("result");
+
+            if (!json.is_object()) {
+                lastError = "ReConfirmOrder 响应不是 JSON 对象";
+                util::log(util::LogLevel::warn, lastError);
+                if (!scheduleRetry(lastError)) {
+                    break;
+                }
+                continue;
+            }
+
+            const auto& obj = json.as_object();
+            result.response = json;
+            bool success = false;
+            bool hasIndicator = false;
+
+            if (auto* isSuccess = obj.if_contains("isSuccess")) {
+                if (isSuccess->is_int64()) {
+                    success = isSuccess->as_int64() == 1;
+                    hasIndicator = true;
+                } else if (isSuccess->is_bool()) {
+                    success = isSuccess->as_bool();
+                    hasIndicator = true;
+                }
+            }
+
+            if (auto* status = obj.if_contains("status"); status && status->is_object()) {
+                const auto& statusObj = status->as_object();
+                if (auto* description = statusObj.if_contains("description"); description && description->is_string()) {
+                    result.description = std::string(description->as_string());
+                }
+                if (auto* message = statusObj.if_contains("message"); message && message->is_string()) {
+                    result.message = std::string(message->as_string());
+                }
+                if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                    result.statusCode = static_cast<int>(code->as_int64());
+                    success = success || code->as_int64() == 0;
+                    hasIndicator = true;
+                }
+            }
+
+            if (auto* message = obj.if_contains("message"); message && message->is_string() && result.message.empty()) {
+                result.message = std::string(message->as_string());
+            }
+
+            auto* resultValue = obj.if_contains("result");
+            bool treatAsSuccess = success;
+            if (!hasIndicator && resultValue) {
+                treatAsSuccess = true;
+            }
+
+            if (treatAsSuccess && resultValue) {
+                result.response = *resultValue;
                 result.success = true;
+                result.shouldContinue = false;
+                result.shouldUpdate = false;
                 return result;
+            }
+
+            lastError = !result.message.empty() ? result.message : "ReConfirmOrder 响应缺少成功结果";
+            util::log(util::LogLevel::warn,
+                      "ReConfirmOrder attempt " + std::to_string(attempt + 1) + " failed: " + lastError);
+            if (!scheduleRetry(lastError)) {
+                break;
             }
         } catch (const util::ProxyError& ex) {
             util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
@@ -397,19 +484,23 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
             if (retried) {
                 continue;
             }
-            if (!handleFailure(ex)) {
+            lastError = ex.what();
+            if (!scheduleRetry(ex.what())) {
+                result.error = ex.what();
                 break;
             }
         } catch (const std::exception& ex) {
             util::log(util::LogLevel::warn, std::string{"ReConfirmOrder attempt failed: "} + ex.what());
-            if (!handleFailure(ex)) {
+            lastError = ex.what();
+            if (!scheduleRetry(ex.what())) {
+                result.error = ex.what();
                 break;
             }
         }
     }
     result.success = false;
     if (result.error.empty()) {
-        result.error = "ReConfirmOrder exhausted retries";
+        result.error = lastError.empty() ? "ReConfirmOrder exhausted retries" : lastError;
     }
     return result;
 }
@@ -417,11 +508,12 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
 void GrabWorkflow::scheduleExecution(GrabContext ctx,
                                      std::function<void(const GrabResult&)> onFinished) {
     auto delay = computeDelay(ctx);
-    util::log(util::LogLevel::info, "请求ID=" + std::to_string(ctx.request.id) +
-        (ctx.quickMode ? " [快速模式]" : "") +
-        (ctx.steadyOrder ? " [稳定抢购]" : "") +
-        (ctx.autoPick ? " [自动选取]" : "") +
-        " 将在 " + std::to_string(delay) + "ms 后开始抢购");
+    util::log(util::LogLevel::info,
+              "请求ID=" + std::to_string(ctx.request.id) +
+                  (ctx.quickMode ? " [快速模式]" : "") +
+                  (ctx.steadyOrder ? " [稳定抢购]" : "") +
+                  (ctx.autoPick ? " [自动选取]" : "") +
+                  " 将在 " + std::to_string(delay) + "ms 后开始抢购");
 
     auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
     timer->expires_after(std::chrono::milliseconds(delay));
@@ -440,46 +532,87 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
         // 由于定时器绑定到了 worker_ 的执行器，抢购流程从延时等待开始便已经在工作线程
         // 上排队执行。这样可以确保单个请求在 worker_ 池中始终只占用一个线程，避免了
         // 先由 io_context 线程触发再切换到 worker_ 造成的双重占用问题。
-        refreshOrderParameters(ctx);
-        boost::json::object payload;
-        bool hasPayload = false;
-        if (ctx.request.orderParameters.is_object()) {
-            payload = ctx.request.orderParameters.as_object();
-            hasPayload = true;
-        } else if (!ctx.request.orderParametersRaw.empty()) {
-            try {
-                auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
-                if (parsed.is_object()) {
-                    payload = parsed.as_object();
-                    hasPayload = true;
-                } else {
+        auto preparePayload = [this](GrabContext& context) {
+            boost::json::object payload;
+            bool hasPayload = false;
+            if (context.request.orderParameters.is_object()) {
+                payload = context.request.orderParameters.as_object();
+                hasPayload = true;
+            } else if (!context.request.orderParametersRaw.empty()) {
+                try {
+                    auto parsed = quickgrab::util::parseJson(context.request.orderParametersRaw);
+                    if (parsed.is_object()) {
+                        payload = parsed.as_object();
+                        hasPayload = true;
+                    } else {
+                        util::log(util::LogLevel::warn,
+                                  "请求 id=" + std::to_string(context.request.id) +
+                                      " 的订单参数不是 JSON 对象，使用默认模板");
+                    }
+                } catch (const std::exception& ex) {
                     util::log(util::LogLevel::warn,
-                              "请求 id=" + std::to_string(ctx.request.id) + " 的订单参数不是 JSON 对象，使用默认模板");
-                }
-            } catch (const std::exception& ex) {
-                util::log(util::LogLevel::warn,
-                          "解析订单参数失败 id=" + std::to_string(ctx.request.id) + " error=" + ex.what());
-            }
-        }
-        if (!hasPayload) {
-            payload = buildBasePayload(ctx);
-        } else {
-            ctx.request.orderParameters = payload;
-            ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
-        }
-        std::cout << "payload = " << boost::json::serialize(payload) << std::endl;
-        auto result = createOrder(ctx, payload);
-        if (result.shouldContinue || result.shouldUpdate) {
-            auto confirm = reConfirmOrder(ctx, payload);
-            if (confirm.success && confirm.response.is_object()) {
-                auto& confirmObj = confirm.response.as_object();
-                if (auto extra = confirmObj.if_contains("extra"); extra && extra->is_object()) {
-                    payload["extra"] = *extra;
+                              "解析订单参数失败 id=" + std::to_string(context.request.id) + " error=" + ex.what());
                 }
             }
-            auto rerun = createOrder(ctx, payload);
-            result = std::move(rerun);
+            if (!hasPayload) {
+                payload = buildBasePayload(context);
+            } else {
+                context.request.orderParameters = payload;
+                context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
+            }
+            return payload;
+        };
+
+        boost::json::object payload = preparePayload(ctx);
+
+        GrabContext mainCtx = ctx;
+        mainCtx.domain = "thor.weidian.com";
+        auto result = createOrder(mainCtx, payload);
+        int attemptCount = 1;
+
+        while ((result.shouldContinue || result.shouldUpdate) && attemptCount < 10) {
+            if (result.shouldUpdate) {
+                refreshOrderParameters(ctx);
+                payload = preparePayload(ctx);
+            }
+
+            if (ctx.steadyOrder || result.shouldUpdate) {
+                auto attemptStart = std::chrono::steady_clock::now();
+                auto confirm = reConfirmOrder(ctx, payload);
+                if (confirm.success && confirm.response.is_object()) {
+                    const auto& confirmObj = confirm.response.as_object();
+                    if (auto updated = quickgrab::util::generateOrderParameters(ctx.request, confirmObj, !ctx.steadyOrder)) {
+                        payload = *updated;
+                        ctx.request.orderParameters = payload;
+                        ctx.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
+                    }
+                }
+
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - attemptStart);
+                if (elapsed.count() < 1000) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsed.count()));
+                }
+
+                GrabContext updatedCtx = ctx;
+                updatedCtx.domain = randomDomain(ctx.extension);
+                result = createOrder(updatedCtx, payload);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(985));
+                result = createOrder(ctx, payload);
+            }
+
+            ++attemptCount;
         }
+
+        if (result.response.is_object()) {
+            auto& responseObj = result.response.as_object();
+            responseObj["count"] = attemptCount;
+            if (attemptCount >= 10 && responseObj.if_contains("isContinue")) {
+                responseObj["isContinue"] = false;
+            }
+        }
+        result.attempts = attemptCount;
 
         boost::asio::post(io_, [onFinished = std::move(onFinished), result = std::move(result)]() mutable {
             onFinished(result);

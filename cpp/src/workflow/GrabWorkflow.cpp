@@ -532,7 +532,22 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
         // 由于定时器绑定到了 worker_ 的执行器，抢购流程从延时等待开始便已经在工作线程
         // 上排队执行。这样可以确保单个请求在 worker_ 池中始终只占用一个线程，避免了
         // 先由 io_context 线程触发再切换到 worker_ 造成的双重占用问题。
-        auto preparePayload = [this](GrabContext& context) {
+        auto ensureReason = [](boost::json::object& payload) {
+            static constexpr const char* kReason = "页面来源";
+            if (auto* reason = payload.if_contains("reason")) {
+                if (reason->is_string()) {
+                    if (reason->as_string().empty()) {
+                        payload["reason"] = kReason;
+                    }
+                } else {
+                    payload["reason"] = kReason;
+                }
+            } else {
+                payload["reason"] = kReason;
+            }
+        };
+
+        auto preparePayload = [this, ensureReason](GrabContext& context) {
             boost::json::object payload;
             bool hasPayload = false;
             if (context.request.orderParameters.is_object()) {
@@ -556,10 +571,10 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
             }
             if (!hasPayload) {
                 payload = buildBasePayload(context);
-            } else {
-                context.request.orderParameters = payload;
-                context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
             }
+            ensureReason(payload);
+            context.request.orderParameters = payload;
+            context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
             return payload;
         };
 
@@ -782,6 +797,7 @@ boost::json::object GrabWorkflow::buildBasePayload(const GrabContext& ctx) const
     payload["device_id"] = ctx.request.deviceId;
     payload["link"] = ctx.request.link;
     payload["thread_id"] = ctx.request.threadId;
+    payload["reason"] = "页面来源";
     return payload;
 }
 

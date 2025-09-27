@@ -312,8 +312,21 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
                 }
             }
 
-            result.success = obj.if_contains("isSuccess") && obj.at("isSuccess").as_int64() == 1;
-            if (result.success||result.message == "OK") {
+            bool success = false;
+            if (auto* isSuccess = obj.if_contains("isSuccess"); isSuccess && isSuccess->is_int64()) {
+                success = isSuccess->as_int64() == 1;
+            }
+            if (!success) {
+                if (auto* status = obj.if_contains("status"); status && status->is_object()) {
+                    const auto& statusObj = status->as_object();
+                    if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                        success = code->as_int64() == 0;
+                    }
+                }
+            }
+
+            result.success = success;
+            if (result.success) {
                 result.shouldContinue = false;
                 result.shouldUpdate = false;
                 return result;

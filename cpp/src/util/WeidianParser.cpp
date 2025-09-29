@@ -53,16 +53,31 @@ std::string decodeHtmlAttribute(const std::string& input) {
 } // namespace
 
 std::optional<boost::json::value> extractDataObject(const std::string& html) {
-    auto markerPos = html.find("id=\"__rocker-render-inject__\"");
+    auto markerPos = html.find("__rocker-render-inject__");
     if (markerPos == std::string::npos) {
         return std::nullopt;
     }
-    auto attrPos = html.find("data-obj=\"", markerPos);
+    auto attrPos = html.find("data-obj", markerPos);
     if (attrPos == std::string::npos) {
         return std::nullopt;
     }
-    attrPos += std::strlen("data-obj=\"");
-    auto end = html.find('"', attrPos);
+    attrPos = html.find('=', attrPos);
+    if (attrPos == std::string::npos) {
+        return std::nullopt;
+    }
+    ++attrPos;
+    while (attrPos < html.size() && std::isspace(static_cast<unsigned char>(html[attrPos]))) {
+        ++attrPos;
+    }
+    if (attrPos >= html.size()) {
+        return std::nullopt;
+    }
+    char quote = html[attrPos];
+    if (quote != '"' && quote != '\'') {
+        return std::nullopt;
+    }
+    ++attrPos;
+    auto end = html.find(quote, attrPos);
     if (end == std::string::npos) {
         return std::nullopt;
     }

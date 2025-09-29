@@ -628,6 +628,34 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
             }
         }
 
+        if (ctx.quickMode) {
+            util::log(util::LogLevel::info,
+                      "请求ID=" + std::to_string(ctx.request.id) +
+                          " 使用快速模式，跳过重新生成订单参数");
+        } else {
+            try {
+                if (auto dataObj = fetchAddOrderData(ctx)) {
+                    tryApplyOrderParameters(ctx,
+                                            *dataObj,
+                                            true,
+                                            3,
+                                            std::chrono::milliseconds(100),
+                                            std::chrono::milliseconds(200),
+                                            "生成订单参数成功",
+                                            "生成订单参数失败，等待重试",
+                                            "生成订单参数失败，将使用现有参数继续执行");
+                } else {
+                    util::log(util::LogLevel::warn,
+                              "请求ID=" + std::to_string(ctx.request.id) +
+                                  " 无法获取下单数据，将尝试使用已有参数");
+                }
+            } catch (const std::exception& ex) {
+                util::log(util::LogLevel::error,
+                          "请求ID=" + std::to_string(ctx.request.id) +
+                              " 生成订单参数过程出现严重错误: " + ex.what());
+            }
+        }
+
         boost::json::object payload = preparePayload(ctx);
 
         GrabContext mainCtx = ctx;

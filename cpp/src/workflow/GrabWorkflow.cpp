@@ -589,31 +589,13 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
 
         auto preparePayload = [this, ensureReason](GrabContext& context) {
             boost::json::object payload;
-            bool hasPayload = false;
+
             if (context.request.orderParameters.is_object()) {
                 payload = context.request.orderParameters.as_object();
-                hasPayload = true;
-            } else if (!context.request.orderParametersRaw.empty()) {
-                try {
-                    auto parsed = quickgrab::util::parseJson(context.request.orderParametersRaw);
-                    if (parsed.is_object()) {
-                        payload = parsed.as_object();
-                        hasPayload = true;
-                    } else {
-                        util::log(util::LogLevel::warn,
-                                  "请求 id=" + std::to_string(context.request.id) +
-                                      " 的订单参数不是 JSON 对象，使用默认模板");
-                    }
-                } catch (const std::exception& ex) {
-                    util::log(util::LogLevel::warn,
-                              "解析订单参数失败 id=" + std::to_string(context.request.id) + " error=" + ex.what());
-                }
+                std::cout << boost::json::serialize(payload) << std::endl;
             }
-            if (!hasPayload) {
-                payload = buildBasePayload(context);
-            }
-            ensureReason(payload);
-            context.request.orderParameters = payload;
+
+
             context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
             return payload;
         };
@@ -788,6 +770,8 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
                                                   useProxy,
                                                   overrideProxy ? &*overrideProxy : nullptr);
                 auto data = util::extractDataObject(response.body());
+                std::cout << "==========================" << std::endl;
+                std::cout << boost::json::serialize(data.value()) << std::endl;
                 if (!data || !data->is_object()) {
                     return std::nullopt;
                 }
@@ -854,27 +838,7 @@ GrabWorkflow::buildPost(const std::string& url,
     return req;
 }
 
-boost::json::object GrabWorkflow::buildBasePayload(const GrabContext& ctx) const {
-    boost::json::object payload;
-    if (ctx.request.orderParameters.is_object()) {
-        return ctx.request.orderParameters.as_object();
-    }
-    if (!ctx.request.orderParametersRaw.empty()) {
-        try {
-            auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
-            if (parsed.is_object()) {
-                return parsed.as_object();
-            }
-        } catch (const std::exception&) {
-        }
-    }
-    payload["buyer_id"] = ctx.request.buyerId;
-    payload["device_id"] = ctx.request.deviceId;
-    payload["link"] = ctx.request.link;
-    payload["thread_id"] = ctx.request.threadId;
-    payload["reason"] = "页面来源";
-    return payload;
-}
+
 
 } // namespace quickgrab::workflow
 

@@ -5,7 +5,7 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
-
+#include <format> // C++20
 namespace quickgrab::util {
 namespace {
 std::mutex& logMutex() {
@@ -38,23 +38,32 @@ void initLogging(LogLevel level) {
     globalLevel() = level;
 }
 
+
+
 void log(LogLevel level, const std::string& message) {
-    if (!shouldLog(level)) {
-        return;
-    }
-    auto now = std::chrono::system_clock::now();
-    auto time = std::chrono::system_clock::to_time_t(now);
+    if (!shouldLog(level)) return;
+
+    using namespace std::chrono;
+
+    const auto now = system_clock::now();
+    const auto sec_tp = floor<seconds>(now);
+    const auto ms = duration_cast<milliseconds>(now - sec_tp).count();
+
+    std::time_t t = system_clock::to_time_t(sec_tp);
     std::tm tmBuf{};
 #ifdef _WIN32
-    localtime_s(&tmBuf, &time);
+    localtime_s(&tmBuf, &t);
 #else
-    localtime_r(&time, &tmBuf);
+    localtime_r(&t, &tmBuf);
 #endif
-    std::ostringstream oss;
-    oss << std::put_time(&tmBuf, "%Y-%m-%d %H:%M:%S");
 
-    std::lock_guard lock(logMutex());
-    std::clog << oss.str() << " [" << toString(level) << "] " << message << std::endl;
+    std::ostringstream oss;
+    oss << std::put_time(&tmBuf, "%Y-%m-%d %H:%M:%S")
+        << '.' << std::setw(3) << std::setfill('0') << ms;
+
+    std::lock_guard lk(logMutex());
+    std::clog << oss.str() << " [" << toString(level) << "] " << message << '\n';
 }
+
 
 } // namespace quickgrab::util

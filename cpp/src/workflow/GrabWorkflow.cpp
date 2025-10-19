@@ -146,7 +146,7 @@ bool shouldUseProxy(const boost::json::object& extension) {
 }
 
 std::string resolveAffinity(const boost::json::object& extension) {
-    static constexpr std::array<std::string_view, 4> keys{"proxyAffinity", "affinity", "proxyKey", "proxy_key"};
+    static constexpr std::array<std::string_view, 3> keys{"proxyAffinity", "proxyKey", "proxy_key"};
     for (auto key : keys) {
         if (auto it = extension.if_contains(key.data())) {
             if (auto value = parseString(*it)) {

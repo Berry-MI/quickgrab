@@ -21,9 +21,10 @@
 #include <unordered_map>
 #include <vector>
 
-namespace quickgrab::controller {
+namespace quickgrab {
+namespace controller {
 namespace {
-void sendJsonResponse(quickgrab::server::RequestContext& ctx,
+void sendJsonResponse(server::RequestContext& ctx,
                       boost::beast::http::status status,
                       const boost::json::value& body) {
     ctx.response.result(status);
@@ -328,7 +329,7 @@ std::optional<bool> readBool(const boost::json::value& value) {
     return std::nullopt;
 }
 
-std::optional<boost::json::object> fetchItemInfo(quickgrab::util::HttpClient& httpClient,
+std::optional<boost::json::object> fetchItemInfo(util::HttpClient& httpClient,
                                                  const std::string& itemId,
                                                  const std::string& cookies) {
     auto context = buildContextFromCookies(cookies);
@@ -345,7 +346,7 @@ std::optional<boost::json::object> fetchItemInfo(quickgrab::util::HttpClient& ht
                       "&context=" + urlEncode(boost::json::serialize(context)) +
                       "&param=" + urlEncode(boost::json::serialize(paramObj));
 
-    std::vector<quickgrab::util::HttpClient::Header> headers{{"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+    std::vector<util::HttpClient::Header> headers{{"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
                                                              {"Referer", "https://android.weidian.com"},
                                                              {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76"}};
 
@@ -514,66 +515,93 @@ int calculateDelayIncrementWithJitter(int stockQuantity) {
 
 boost::json::object parseLinkPayload(const std::string& link) {
     auto queryPos = link.find('?');
-    if (queryPos == std::string::npos) {
+    if (queryPos == std::string::npos || queryPos + 1 >= link.size()) {
         return {};
     }
 
-    auto params = parseFormUrlEncoded(link.substr(queryPos + 1));
-    auto itemsIt = params.find("items");
-    auto sourceIt = params.find("source_id");
-    if (itemsIt == params.end() || sourceIt == params.end()) {
-        return {};
-    }
+    std::string query = link.substr(queryPos + 1);
+    std::string itemsParam;
+    std::string sourceId;
 
-    boost::json::array itemList;
-    std::string_view itemsView(itemsIt->second);
     std::size_t start = 0;
-    while (start <= itemsView.size()) {
-        auto end = itemsView.find(',', start);
-        if (end == std::string_view::npos) {
-            end = itemsView.size();
+    while (start < query.size()) {
+        auto end = query.find('&', start);
+        if (end == std::string::npos) {
+            end = query.size();
         }
-        auto token = itemsView.substr(start, end - start);
+        auto token = query.substr(start, end - start);
         start = end + 1;
         if (token.empty()) {
             continue;
         }
 
-        std::vector<std::string> parts;
-        std::size_t partStart = 0;
-        while (partStart <= token.size()) {
-            auto partEnd = token.find('_', partStart);
-            if (partEnd == std::string_view::npos) {
-                parts.emplace_back(token.substr(partStart));
-                break;
-            }
-            parts.emplace_back(token.substr(partStart, partEnd - partStart));
-            partStart = partEnd + 1;
-        }
-
-        if (parts.size() < 4) {
+        auto eq = token.find('=');
+        if (eq == std::string::npos) {
             continue;
         }
 
-        int quantity = 0;
-        try {
-            quantity = std::stoi(parts[1]);
-        } catch (const std::exception&) {
+        auto key = token.substr(0, eq);
+        auto value = token.substr(eq + 1);
+        if (key == "items") {
+            itemsParam = percentDecode(value);
+        } else if (key == "source_id") {
+            sourceId = percentDecode(value);
+        }
+    }
+
+    if (itemsParam.empty()) {
+        return {};
+    }
+
+    boost::json::array itemList;
+    std::size_t itemStart = 0;
+    while (itemStart < itemsParam.size()) {
+        auto itemEnd = itemsParam.find(',', itemStart);
+        if (itemEnd == std::string::npos) {
+            itemEnd = itemsParam.size();
+        }
+        auto part = itemsParam.substr(itemStart, itemEnd - itemStart);
+        itemStart = itemEnd + 1;
+        if (part.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> pieces;
+        std::size_t pieceStart = 0;
+        while (pieceStart <= part.size()) {
+            auto pieceEnd = part.find('_', pieceStart);
+            if (pieceEnd == std::string::npos) {
+                pieces.emplace_back(part.substr(pieceStart));
+                break;
+            }
+            pieces.emplace_back(part.substr(pieceStart, pieceEnd - pieceStart));
+            pieceStart = pieceEnd + 1;
+        }
+
+        if (pieces.size() < 4 || pieces[0].empty()) {
             continue;
         }
 
         boost::json::object item;
-        item["item_id"] = parts[0];
-        item["quantity"] = quantity;
-        item["price_type"] = parts[2];
-        auto skuId = parts[3];
-        if (skuId.empty() || skuId == "__") {
-            item["item_sku_id"] = "0";
-        } else {
-            item["item_sku_id"] = skuId;
+        item["item_id"] = pieces[0];
+
+        try {
+            auto quantity = !pieces[1].empty() ? std::stoll(pieces[1]) : 0LL;
+            item["quantity"] = quantity;
+        } catch (const std::exception&) {
+            item["quantity"] = 0;
         }
+
+        item["price_type"] = pieces[2];
+
+        std::string skuId = pieces[3];
+        if (skuId.empty() || skuId == "__") {
+            skuId = "0";
+        }
+        item["item_sku_id"] = skuId;
         item["item_type"] = "0";
         item["use_installment"] = 1;
+
         itemList.emplace_back(std::move(item));
     }
 
@@ -585,7 +613,9 @@ boost::json::object parseLinkPayload(const std::string& link) {
     payload["buyer"] = boost::json::object{};
     payload["channel"] = "maijiaban";
     payload["item_list"] = std::move(itemList);
-    payload["source_id"] = sourceIt->second;
+    if (!sourceId.empty()) {
+        payload["source_id"] = std::move(sourceId);
+    }
     return payload;
 }
 
@@ -599,10 +629,10 @@ bool looksLikeValidCookie(const std::string& cookies) {
 }
 } // namespace
 
-ToolController::ToolController(quickgrab::util::HttpClient& httpClient)
+ToolController::ToolController(util::HttpClient& httpClient)
     : httpClient_(httpClient) {}
 
-void ToolController::registerRoutes(quickgrab::server::Router& router) {
+void ToolController::registerRoutes(server::Router& router) {
     auto bindGetNote = [this](auto& ctx) { handleGetNote(ctx); };
     router.addRoute("POST", "/getNote", bindGetNote);
     router.addRoute("POST", "/api/getNote", bindGetNote);
@@ -620,7 +650,7 @@ void ToolController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/checkLatency", bindCheckLatency);
 }
 
-void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {
+void ToolController::handleGetNote(server::RequestContext& ctx) {
     try {
         auto json = boost::json::parse(ctx.request.body());
         if (!json.is_object()) {
@@ -649,7 +679,7 @@ void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {
     }
 }
 
-void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx) {
+void ToolController::handleFetchItemInfo(server::RequestContext& ctx) {
     try {
         auto form = parseFormUrlEncoded(ctx.request.body());
         auto linkIt = form.find("link");
@@ -805,7 +835,7 @@ void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx)
     }
 }
 
-void ToolController::handleCheckCookies(quickgrab::server::RequestContext& ctx) {
+void ToolController::handleCheckCookies(server::RequestContext& ctx) {
     auto params = parseQueryParameters(ctx.request.target());
     auto it = params.find("cookies");
     bool valid = it != params.end() && looksLikeValidCookie(it->second);
@@ -815,7 +845,7 @@ void ToolController::handleCheckCookies(quickgrab::server::RequestContext& ctx) 
     sendJsonResponse(ctx, boost::beast::http::status::ok, std::move(body));
 }
 
-void ToolController::handleCheckLatency(quickgrab::server::RequestContext& ctx) {
+void ToolController::handleCheckLatency(server::RequestContext& ctx) {
     long latency = -1;
     try {
         auto json = boost::json::parse(ctx.request.body());
@@ -851,4 +881,5 @@ void ToolController::handleCheckLatency(quickgrab::server::RequestContext& ctx) 
     ctx.response.prepare_payload();
 }
 
-} // namespace quickgrab::controller
+} // namespace controller
+} // namespace quickgrab

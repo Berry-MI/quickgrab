@@ -2,24 +2,26 @@
 
 #include "quickgrab/server/Router.hpp"
 
-namespace quickgrab::util {
+namespace quickgrab {
+namespace util {
 class HttpClient;
-}
+} // namespace util
 
-namespace quickgrab::controller {
+namespace controller {
 
 class ToolController {
 public:
-    explicit ToolController(quickgrab::util::HttpClient& httpClient);
-    void registerRoutes(quickgrab::server::Router& router);
+    explicit ToolController(util::HttpClient& httpClient);
+    void registerRoutes(server::Router& router);
 
 private:
-    void handleGetNote(quickgrab::server::RequestContext& ctx);
-    void handleFetchItemInfo(quickgrab::server::RequestContext& ctx);
-    void handleCheckCookies(quickgrab::server::RequestContext& ctx);
-    void handleCheckLatency(quickgrab::server::RequestContext& ctx);
+    void handleGetNote(server::RequestContext& ctx);
+    void handleFetchItemInfo(server::RequestContext& ctx);
+    void handleCheckCookies(server::RequestContext& ctx);
+    void handleCheckLatency(server::RequestContext& ctx);
 
-    quickgrab::util::HttpClient& httpClient_;
+    util::HttpClient& httpClient_;
 };
 
-} // namespace quickgrab::controller
+} // namespace controller
+} // namespace quickgrab

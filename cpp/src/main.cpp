@@ -238,7 +238,7 @@ int main(int /*argc*/, char** /*argv*/) {
     controller::SubmitController submitController{grabService, authService, httpClient};
     submitController.registerRoutes(*router);
 
-    controller::ToolController toolController;
+    controller::ToolController toolController{ httpClient };
     toolController.registerRoutes(*router);
 
     controller::UserController userController{authService};

@@ -62,6 +62,9 @@ private:
     void scheduleExecution(GrabContext ctx,
         std::function<void(const GrabResult&)> onFinished);
 
+    void schedulePick(GrabContext ctx,
+        std::function<void(const GrabResult&)> onFinished);
+
 
     void prepareContext(const model::Request& request, GrabContext& ctx);
 

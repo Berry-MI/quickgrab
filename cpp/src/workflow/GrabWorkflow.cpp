@@ -146,7 +146,7 @@ bool shouldUseProxy(const boost::json::object& extension) {
 }
 
 std::string resolveAffinity(const boost::json::object& extension) {
-    static constexpr std::array<std::string_view, 4> keys{"proxyAffinity", "affinity", "proxyKey", "proxy_key"};
+    static constexpr std::array<std::string_view, 3> keys{"proxyAffinity", "proxyKey", "proxy_key"};
     for (auto key : keys) {
         if (auto it = extension.if_contains(key.data())) {
             if (auto value = parseString(*it)) {
@@ -189,7 +189,12 @@ void GrabWorkflow::run(const model::Request& request,
                        std::function<void(const GrabResult&)> onFinished) {
     GrabContext ctx;
     prepareContext(request, ctx);
-    scheduleExecution(std::move(ctx), std::move(onFinished));
+    const bool pickMode = (request.type == 3) || ctx.autoPick;
+    if (pickMode) {
+        schedulePick(std::move(ctx), std::move(onFinished));
+    } else {
+        scheduleExecution(std::move(ctx), std::move(onFinished));
+    }
 }
 
 void GrabWorkflow::prepareContext(const model::Request& request, GrabContext& ctx) {
@@ -602,6 +607,363 @@ void GrabWorkflow::scheduleExecution(
             boost::asio::post(
                 io_,
                 [onFinished = std::move(onFinished), result = std::move(result)]() mutable {
+                    onFinished(result);
+                }
+            );
+        }
+    );
+}
+
+void GrabWorkflow::schedulePick(
+    GrabContext ctx,
+    std::function<void(const GrabResult&)> onFinished
+) {
+    util::log(
+        util::LogLevel::info,
+        "请求ID=" + std::to_string(ctx.request.id) +
+            (ctx.quickMode ? " [快速模式]" : "") +
+            " [捡漏] 即刻开始执行"
+    );
+
+    refreshOrderParameters(ctx);
+
+    auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
+    timer->expires_after(std::chrono::milliseconds(0));
+
+    timer->async_wait(
+        [this, ctx = std::move(ctx), onFinished = std::move(onFinished), timer]
+        (const boost::system::error_code& ec) mutable {
+            if (ec) {
+                GrabResult cancelled;
+                cancelled.success = false;
+                cancelled.statusCode = 499;
+                cancelled.message = ec.message();
+                boost::asio::post(
+                    io_,
+                    [onFinished = std::move(onFinished), cancelled]() mutable {
+                        onFinished(cancelled);
+                    }
+                );
+                return;
+            }
+
+            GrabResult finalResult;
+            finalResult.success = false;
+            finalResult.shouldContinue = false;
+            finalResult.shouldUpdate = false;
+            finalResult.statusCode = 400;
+
+            do {
+                auto* paramsObj = ctx.request.orderParameters.if_object();
+                if (!paramsObj && !ctx.request.orderParametersRaw.empty()) {
+                    try {
+                        auto parsed = quickgrab::util::parseJson(ctx.request.orderParametersRaw);
+                        if (parsed.is_object()) {
+                            ctx.request.orderParameters = parsed;
+                            paramsObj = ctx.request.orderParameters.if_object();
+                        }
+                    } catch (const std::exception& ex) {
+                        util::log(util::LogLevel::warn,
+                                  "请求ID=" + std::to_string(ctx.request.id) +
+                                      " 解析订单参数失败: " + ex.what());
+                    }
+                }
+
+                if (!paramsObj) {
+                    finalResult.message = "订单参数缺失";
+                    break;
+                }
+
+                const boost::json::array* shopList = nullptr;
+                if (auto* node = paramsObj->if_contains("shop_list"); node && node->is_array()) {
+                    shopList = &node->as_array();
+                }
+                if (!shopList || shopList->empty() || !(*shopList)[0].is_object()) {
+                    finalResult.message = "订单参数缺少商品信息";
+                    break;
+                }
+
+                const auto& firstShop = (*shopList)[0].as_object();
+                const boost::json::array* itemList = nullptr;
+                if (auto* node = firstShop.if_contains("item_list"); node && node->is_array()) {
+                    itemList = &node->as_array();
+                }
+                if (!itemList || itemList->empty() || !(*itemList)[0].is_object()) {
+                    finalResult.message = "订单参数缺少商品信息";
+                    break;
+                }
+
+                const auto& firstItem = (*itemList)[0].as_object();
+                std::optional<std::string> itemId;
+                if (auto* node = firstItem.if_contains("item_id")) {
+                    itemId = parseString(*node);
+                }
+                std::optional<std::string> skuId;
+                if (auto* node = firstItem.if_contains("item_sku_id")) {
+                    skuId = parseString(*node);
+                }
+
+                if (!itemId) {
+                    finalResult.message = "订单参数缺少商品编号";
+                    break;
+                }
+
+                std::string skuIdValue = skuId.value_or("0");
+                int quantity = 1;
+                if (auto* node = firstItem.if_contains("quantity")) {
+                    if (node->is_int64()) {
+                        quantity = static_cast<int>(node->as_int64());
+                    } else if (node->is_double()) {
+                        quantity = static_cast<int>(std::lround(node->as_double()));
+                    } else if (node->is_string()) {
+                        try {
+                            quantity = std::stoi(std::string(node->as_string().c_str()));
+                        } catch (const std::exception&) {
+                        }
+                    }
+                }
+                if (quantity < 1) {
+                    quantity = 1;
+                }
+
+                auto endTime = ctx.request.endTime;
+                const auto now = std::chrono::system_clock::now();
+                if (endTime <= now) {
+                    endTime = now + std::chrono::minutes(5);
+                }
+
+                int frequency = ctx.request.frequency;
+                frequency = std::max(frequency - 150, 100);
+                util::log(util::LogLevel::info,
+                          "请求ID=" + std::to_string(ctx.request.id) + " 检查商品库存");
+
+                bool useProxy = ctx.useProxy;
+                std::optional<proxy::ProxyEndpoint> overrideProxy = ctx.assignedProxy;
+                const std::string affinity = ctx.proxyAffinity.empty() ? ctx.request.threadId : ctx.proxyAffinity;
+
+                const std::vector<util::HttpClient::Header> commonHeaders{
+                    {"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+                    {"Referer", "https://weidian.com/"},
+                    {"User-Agent", kDesktopUA},
+                };
+
+                auto fetchJson = [&](const std::string& url,
+                                     std::chrono::seconds timeout,
+                                     std::string_view action) -> std::optional<boost::json::value> {
+                    for (int attempt = 0; attempt < 2; ++attempt) {
+                        try {
+                            auto response = httpClient_.fetch("GET",
+                                                              url,
+                                                              commonHeaders,
+                                                              "",
+                                                              affinity,
+                                                              timeout,
+                                                              true,
+                                                              5,
+                                                              nullptr,
+                                                              useProxy,
+                                                              overrideProxy ? &*overrideProxy : nullptr);
+                            return quickgrab::util::parseJson(response.body());
+                        } catch (const util::ProxyError& ex) {
+                            util::log(util::LogLevel::warn,
+                                      "请求ID=" + std::to_string(ctx.request.id) + " " + std::string(action) +
+                                          " 失败: " + ex.what());
+                            bool retried = false;
+                            if (overrideProxy) {
+                                util::log(util::LogLevel::info,
+                                          "请求ID=" + std::to_string(ctx.request.id) + " 指定代理 " + overrideProxy->host +
+                                              ":" + std::to_string(overrideProxy->port) + " 失效，将尝试代理池或直连");
+                                overrideProxy.reset();
+                                retried = true;
+                            } else if (useProxy) {
+                                util::log(util::LogLevel::info,
+                                          "请求ID=" + std::to_string(ctx.request.id) +
+                                              " 代理请求失败，将改为直连重试");
+                                useProxy = false;
+                                retried = true;
+                            }
+                            if (!retried) {
+                                return std::nullopt;
+                            }
+                        } catch (const std::exception& ex) {
+                            util::log(util::LogLevel::warn,
+                                      "请求ID=" + std::to_string(ctx.request.id) + " " + std::string(action) +
+                                          " 异常: " + ex.what());
+                            return std::nullopt;
+                        }
+                    }
+                    return std::nullopt;
+                };
+
+                auto buildInventoryUrl = [&](const std::string& domain) {
+                    boost::json::object payload;
+                    payload["itemId"] = *itemId;
+                    payload["source"] = "h5";
+                    payload["skuId"] = skuIdValue;
+                    payload["count"] = quantity;
+                    auto jsonPayload = quickgrab::util::stringifyJson(payload);
+                    return "https://" + domain + "/vcart/addCart/2.0?" + toQuery(jsonPayload);
+                };
+
+                auto buildSkuInfoUrl = [&](const std::string& domain) {
+                    boost::json::object payload;
+                    payload["itemId"] = *itemId;
+                    auto jsonPayload = quickgrab::util::stringifyJson(payload);
+                    return "https://" + domain + "/detailmjb/getItemSkuInfo/1.0?" + toQuery(jsonPayload);
+                };
+
+                GrabContext createCtx = ctx;
+                createCtx.domain = randomDomain(ctx.extension);
+
+                int count = 0;
+                bool virtualItem = false;
+                std::optional<GrabResult> pickResult;
+
+                while (std::chrono::system_clock::now() < endTime) {
+                    auto inventoryUrl = buildInventoryUrl(randomDomain(ctx.extension));
+                    auto inventory = fetchJson(inventoryUrl, std::chrono::seconds{20}, "获取商品库存");
+                    if (inventory && inventory->is_object()) {
+                        const auto& invObj = inventory->as_object();
+                        int statusCode = -1;
+                        if (auto* status = invObj.if_contains("status"); status && status->is_object()) {
+                            const auto& statusObj = status->as_object();
+                            if (auto* code = statusObj.if_contains("code"); code && code->is_int64()) {
+                                statusCode = static_cast<int>(code->as_int64());
+                            }
+                        }
+
+                        if (statusCode == 12) {
+                            util::log(util::LogLevel::info,
+                                      "请求ID=" + std::to_string(ctx.request.id) + " 商品不支持加购物车，尝试虚拟库存流程");
+                            virtualItem = true;
+                            break;
+                        }
+
+                        if (statusCode == 0 || statusCode == 3) {
+                            util::log(util::LogLevel::info,
+                                      "请求ID=" + std::to_string(ctx.request.id) + " 商品有货，尝试下单");
+                            createCtx.useProxy = useProxy;
+                            createCtx.assignedProxy = overrideProxy;
+                            createCtx.proxyAffinity = affinity;
+                            auto attempt = createOrder(createCtx, *paramsObj);
+                            if (attempt.response.is_object()) {
+                                auto& responseObj = attempt.response.as_object();
+                                responseObj["count"] = count;
+                                if (count >= 10 && responseObj.if_contains("isContinue")) {
+                                    responseObj["isContinue"] = false;
+                                }
+                            }
+                            attempt.attempts = count + std::max(1, attempt.attempts);
+                            pickResult = attempt;
+                            if (!attempt.shouldContinue) {
+                                break;
+                            }
+                        }
+                    } else {
+                        util::log(util::LogLevel::warn,
+                                  "请求ID=" + std::to_string(ctx.request.id) + " 获取商品库存失败");
+                    }
+
+                    ++count;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(frequency));
+                }
+
+                if (virtualItem && std::chrono::system_clock::now() < endTime && !pickResult) {
+                    while (std::chrono::system_clock::now() < endTime) {
+                        auto skuInfoUrl = buildSkuInfoUrl(randomDomain(ctx.extension));
+                        auto skuInfo = fetchJson(skuInfoUrl, std::chrono::seconds{20}, "获取虚拟库存信息");
+                        if (skuInfo && skuInfo->is_object()) {
+                            const auto& skuRoot = skuInfo->as_object();
+                            const boost::json::object* resultObj = nullptr;
+                            if (auto* node = skuRoot.if_contains("result"); node && node->is_object()) {
+                                resultObj = &node->as_object();
+                            }
+                            int stock = 0;
+                            if (resultObj) {
+                                if (skuIdValue == "0") {
+                                    if (auto* node = resultObj->if_contains("itemStock"); node && node->is_int64()) {
+                                        stock = static_cast<int>(node->as_int64());
+                                    }
+                                } else if (auto* node = resultObj->if_contains("skuInfos"); node && node->is_array()) {
+                                    for (const auto& skuEntry : node->as_array()) {
+                                        if (!skuEntry.is_object()) {
+                                            continue;
+                                        }
+                                        const auto& skuObj = skuEntry.as_object();
+                                        if (auto* idNode = skuObj.if_contains("id"); idNode) {
+                                            auto candidate = parseString(*idNode);
+                                            if (candidate && *candidate == skuIdValue) {
+                                                if (auto* stockNode = skuObj.if_contains("stock"); stockNode) {
+                                                    if (stockNode->is_int64()) {
+                                                        stock = static_cast<int>(stockNode->as_int64());
+                                                    } else if (stockNode->is_string()) {
+                                                        try {
+                                                            stock = std::stoi(std::string(stockNode->as_string().c_str()));
+                                                        } catch (const std::exception&) {
+                                                        }
+                                                    }
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (stock > 0) {
+                                util::log(util::LogLevel::info,
+                                          "请求ID=" + std::to_string(ctx.request.id) + " 虚拟商品有库存，尝试下单");
+                                createCtx.useProxy = useProxy;
+                                createCtx.assignedProxy = overrideProxy;
+                                createCtx.proxyAffinity = affinity;
+                                auto attempt = createOrder(createCtx, *paramsObj);
+                                if (attempt.response.is_object()) {
+                                    auto& responseObj = attempt.response.as_object();
+                                    responseObj["count"] = count;
+                                    if (count >= 10 && responseObj.if_contains("isContinue")) {
+                                        responseObj["isContinue"] = false;
+                                    }
+                                }
+                                attempt.attempts = count + std::max(1, attempt.attempts);
+                                pickResult = attempt;
+                                if (!attempt.shouldContinue) {
+                                    break;
+                                }
+                            }
+                        } else {
+                            util::log(util::LogLevel::warn,
+                                      "请求ID=" + std::to_string(ctx.request.id) + " 获取虚拟库存失败");
+                        }
+
+                        ++count;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(frequency));
+                    }
+                }
+
+                if (pickResult) {
+                    util::log(util::LogLevel::info,
+                              "请求ID=" + std::to_string(ctx.request.id) + " 捡漏结束");
+                    finalResult = std::move(*pickResult);
+                    break;
+                }
+
+                util::log(util::LogLevel::info,
+                          "请求ID=" + std::to_string(ctx.request.id) + " 捡漏超时");
+                boost::json::object status;
+                status["code"] = 400;
+                status["message"] = "抢购失败";
+                status["description"] = "运行超时";
+                boost::json::object response;
+                response["status"] = status;
+                response["result"] = nullptr;
+                finalResult.response = response;
+                finalResult.message = "捡漏超时";
+                finalResult.attempts = count;
+            } while (false);
+
+            boost::asio::post(
+                io_,
+                [onFinished = std::move(onFinished), result = std::move(finalResult)]() mutable {
                     onFinished(result);
                 }
             );

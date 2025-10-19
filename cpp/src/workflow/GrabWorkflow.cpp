@@ -338,7 +338,7 @@ GrabResult GrabWorkflow::createOrder(const GrabContext& ctx, const boost::json::
                 (obj.if_contains("isContinue") && obj.at("isContinue").is_bool() && obj.at("isContinue").as_bool());
 
             result.shouldUpdate = updateHint;
-            result.shouldContinue = retryHint || updateHint;
+            result.shouldContinue = retryHint && !updateHint;
         }
         else {
             result.message = "未知响应";
@@ -505,201 +505,111 @@ GrabResult GrabWorkflow::reConfirmOrder(const GrabContext& ctx, const boost::jso
     return result;
 }
 
-void GrabWorkflow::scheduleExecution(GrabContext ctx,
-                                     std::function<void(const GrabResult&)> onFinished) {
-    auto delay = computeDelay(ctx);
-    util::log(util::LogLevel::info,
-              "请求ID=" + std::to_string(ctx.request.id) +
-                  (ctx.quickMode ? " [快速模式]" : "") +
-                  (ctx.steadyOrder ? " [稳定抢购]" : "") +
-                  (ctx.autoPick ? " [自动选取]" : "") +
-                  " 将在 " + std::to_string(delay) + "ms 后开始抢购");
+void GrabWorkflow::scheduleExecution(
+    GrabContext ctx,
+    std::function<void(const GrabResult&)> onFinished
+) {
+    const auto delay = computeDelay(ctx);
+    util::log(
+        util::LogLevel::info,
+        "请求ID=" + std::to_string(ctx.request.id) +
+        (ctx.quickMode ? " [快速模式]" : "") +
+        (ctx.steadyOrder ? " [稳定抢购]" : "") +
+        (ctx.autoPick ? " [自动选取]" : "") +
+        " 将在 " + std::to_string(delay) + "ms 后开始抢购"
+    );
 
-    auto tryApplyOrderParameters = [&](GrabContext& context,
-                                       const boost::json::object& data,
-                                       bool includeInvalid,
-                                       int maxAttempts,
-                                       std::chrono::milliseconds initialDelay,
-                                       std::chrono::milliseconds maxDelay,
-                                       std::string_view successMsg,
-                                       std::string_view retryMsg,
-                                       std::string_view giveUpMsg) {
-        auto waitTime = initialDelay;
-        for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-            if (auto params = quickgrab::util::generateOrderParameters(
-                    context.request, data, includeInvalid)) {
-                context.request.orderParameters = *params;
-                context.request.orderParametersRaw =
-                    quickgrab::util::stringifyJson(*params);
-                util::log(util::LogLevel::info,
-                          "请求ID=" + std::to_string(context.request.id) + " " +
-                              std::string(successMsg));
-                return true;
-            }
-
-            if (attempt + 1 < maxAttempts) {
-                util::log(util::LogLevel::warn,
-                          "请求ID=" + std::to_string(context.request.id) + " " +
-                              std::string(retryMsg));
-                std::this_thread::sleep_for(waitTime);
-                waitTime *= 2;
-                if (waitTime > maxDelay) {
-                    waitTime = maxDelay;
-                }
-            }
-        }
-
-        util::log(util::LogLevel::error,
-                  "请求ID=" + std::to_string(context.request.id) + " " +
-                      std::string(giveUpMsg));
-        return false;
-    };
-
-    auto prepareInitialOrderParameters = [&](GrabContext& context) {
-        if (context.quickMode) {
-            util::log(util::LogLevel::info,
-                      "请求ID=" + std::to_string(context.request.id) +
-                          " 使用快速模式，跳过重新生成订单参数");
-            return;
-        }
-
-        try {
-            if (auto dataObj = fetchAddOrderData(context)) {
-                tryApplyOrderParameters(context,
-                                        *dataObj,
-                                        true,
-                                        3,
-                                        std::chrono::milliseconds(100),
-                                        std::chrono::milliseconds(200),
-                                        "生成订单参数成功",
-                                        "生成订单参数失败，等待重试",
-                                        "生成订单参数失败，将使用现有参数继续执行");
-            } else {
-                util::log(util::LogLevel::warn,
-                          "请求ID=" + std::to_string(context.request.id) +
-                              " 无法获取下单数据，将尝试使用已有参数");
-            }
-        } catch (const std::exception& ex) {
-            util::log(util::LogLevel::error,
-                      "请求ID=" + std::to_string(context.request.id) +
-                          " 生成订单参数过程出现严重错误: " + ex.what());
-        }
-    };
-
-    prepareInitialOrderParameters(ctx);
+    refreshOrderParameters(ctx);
 
     auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
     timer->expires_after(std::chrono::milliseconds(delay));
-    timer->async_wait([this,
-                       ctx = std::move(ctx),
-                       onFinished = std::move(onFinished),
-                       timer,
-                       tryApplyOrderParameters](const boost::system::error_code& ec) mutable {
-        if (ec) {
-            GrabResult cancelled;
-            cancelled.success = false;
-            cancelled.statusCode = 499;
-            cancelled.message = ec.message();
-            boost::asio::post(io_, [onFinished = std::move(onFinished), cancelled]() mutable {
-                onFinished(cancelled);
-            });
-            return;
-        }
 
-        // 由于定时器绑定到了 worker_ 的执行器，抢购流程从延时等待开始便已经在工作线程
-        // 上排队执行。这样可以确保单个请求在 worker_ 池中始终只占用一个线程，避免了
-        // 先由 io_context 线程触发再切换到 worker_ 造成的双重占用问题。
-        auto ensureReason = [](boost::json::object& payload) {
-            static constexpr const char* kReason = "页面来源";
-            if (auto* reason = payload.if_contains("reason")) {
-                if (reason->is_string()) {
-                    if (reason->as_string().empty()) {
-                        payload["reason"] = kReason;
+    timer->async_wait(
+        [this, ctx = std::move(ctx), onFinished = std::move(onFinished), timer]
+        (const boost::system::error_code& ec) mutable {
+            if (ec) {
+                GrabResult cancelled;
+                cancelled.success = false;
+                cancelled.statusCode = 499;
+                cancelled.message = ec.message();
+                boost::asio::post(
+                    io_,
+                    [onFinished = std::move(onFinished), cancelled]() mutable {
+                        onFinished(cancelled);
                     }
-                } else {
-                    payload["reason"] = kReason;
-                }
-            } else {
-                payload["reason"] = kReason;
-            }
-        };
-
-        auto preparePayload = [this, ensureReason](GrabContext& context) {
-            boost::json::object payload;
-
-            if (context.request.orderParameters.is_object()) {
-                payload = context.request.orderParameters.as_object();
-                std::cout << boost::json::serialize(payload) << std::endl;
+                );
+                return;
             }
 
+            // 由于定时器绑定到了 worker_ 的执行器，抢购流程从延时等待开始便已经在工作线程
+            // 上排队执行。这样可以确保单个请求在 worker_ 池中始终只占用一个线程，避免了
+            // 先由 io_context 线程触发再切换到 worker_ 造成的双重占用问题。
 
-            context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
-            return payload;
-        };
+            // 首次下单：固定 thor
+            GrabContext mainCtx = ctx;
+            mainCtx.domain = "thor.weidian.com";
 
-        boost::json::object payload = preparePayload(ctx);
+            auto result = createOrder(mainCtx, ctx.request.orderParameters.as_object());
+            int attemptCount = 1;
 
-        GrabContext mainCtx = ctx;
-        mainCtx.domain = "thor.weidian.com";
-        auto result = createOrder(mainCtx, payload);
-        int attemptCount = 1;
+            while (result.shouldContinue && attemptCount < 10) {
+                if (result.shouldUpdate) {
+                    // （可选）对齐 Java：确认前等待 300ms
+                    // std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-        while ((result.shouldContinue || result.shouldUpdate) && attemptCount < 10) {
-            if (result.shouldUpdate) {
-                refreshOrderParameters(ctx);
-                payload = preparePayload(ctx);
-            }
+                    const auto attemptStart = std::chrono::steady_clock::now();
 
-            if (ctx.steadyOrder || result.shouldUpdate) {
-                auto attemptStart = std::chrono::steady_clock::now();
-                auto confirm = reConfirmOrder(ctx, payload);
-                if (confirm.success && confirm.response.is_object()) {
-                    const auto& confirmObj = confirm.response.as_object();
-                    if (!tryApplyOrderParameters(ctx,
-                                                 confirmObj,
-                                                 !ctx.steadyOrder,
-                                                 5,
-                                                 std::chrono::milliseconds(50),
-                                                 std::chrono::milliseconds(1000),
-                                                 "更新订单参数成功",
-                                                 "更新订单参数失败，等待重试",
-                                                 "更新订单参数失败，重新尝试")) {
-                        continue;
+                    // 先 reConfirm，再视结果刷新参数
+                    auto confirm = reConfirmOrder(ctx, ctx.request.orderParameters.as_object());
+                    if (confirm.success && confirm.response.is_object()) {
+                        refreshOrderParameters(ctx);
                     }
-                    payload = preparePayload(ctx);
+
+                    // 稳定节流：确保“确认→下单”至少 1s
+                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - attemptStart
+                    );
+                    if (elapsed.count() < 1000) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsed.count()));
+                    }
+
+                    // 更新域名（容灾/分流）
+                    GrabContext updatedCtx = ctx;
+                    updatedCtx.domain = randomDomain(ctx.extension);
+
+                    result = createOrder(updatedCtx, ctx.request.orderParameters.as_object());
+                }
+                else {
+                    // 普通重试分支：轻微节流
+                    std::this_thread::sleep_for(std::chrono::milliseconds(985));
+                    result = createOrder(ctx, ctx.request.orderParameters.as_object());
                 }
 
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - attemptStart);
-                if (elapsed.count() < 1000) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsed.count()));
+                ++attemptCount;
+            }
+
+            // 补充统计信息
+            if (result.response.is_object()) {
+                auto& responseObj = result.response.as_object();
+                responseObj["count"] = attemptCount;
+                if (attemptCount >= 10 && responseObj.if_contains("isContinue")) {
+                    responseObj["isContinue"] = false;
                 }
-
-                GrabContext updatedCtx = ctx;
-                updatedCtx.domain = randomDomain(ctx.extension);
-                result = createOrder(updatedCtx, payload);
-            } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(985));
-                result = createOrder(ctx, payload);
             }
+            result.attempts = attemptCount;
 
-            ++attemptCount;
+            // 切回 io_ 执行回调
+            boost::asio::post(
+                io_,
+                [onFinished = std::move(onFinished), result = std::move(result)]() mutable {
+                    onFinished(result);
+                }
+            );
         }
-
-        if (result.response.is_object()) {
-            auto& responseObj = result.response.as_object();
-            responseObj["count"] = attemptCount;
-            if (attemptCount >= 10 && responseObj.if_contains("isContinue")) {
-                responseObj["isContinue"] = false;
-            }
-        }
-        result.attempts = attemptCount;
-
-        boost::asio::post(io_, [onFinished = std::move(onFinished), result = std::move(result)]() mutable {
-            onFinished(result);
-        });
-    });
+    );
 }
+
+
 
 void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
     if (ctx.quickMode) {
@@ -752,21 +662,23 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
     try {
         for (int attempt = 0; attempt < 2; ++attempt) {
             try {
-                util::log(util::LogLevel::info,
-                "请求ID=" + std::to_string(ctx.request.id) +
-                    " 开始 fetch: method=GET"
-                    ", url=" + ctx.request.link +
+                util::log(
+                    util::LogLevel::info,
+                    "请求ID=" + std::to_string(ctx.request.id) +
+                    " 开始获取订单参数"
                     ", affinity=" + affinity +
                     ", useProxy=" + (useProxy ? "true" : "false") +
                     (overrideProxy
                         ? (", overrideProxy=" + overrideProxy->host + ":" + std::to_string(overrideProxy->port))
                         : ", overrideProxy=<none>") +
-                    ", timeout=30s, maxRedirects=5");
+                    ", timeout=30s, maxRedirects=5"
+                );
 
                     for (const auto& h : headers) {
                         util::log(util::LogLevel::debug, "请求ID=" + std::to_string(ctx.request.id) +
                             " header: " + h.name + " = " + h.value);
                     }
+                const auto t0 = std::chrono::steady_clock::now();
                 auto response = httpClient_.fetch("GET",
                                                   ctx.request.link,
                                                   headers,
@@ -778,6 +690,12 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
                                                   nullptr,
                                                   useProxy,
                                                   overrideProxy ? &*overrideProxy : nullptr);
+                const auto t1 = std::chrono::steady_clock::now();
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+                quickgrab::util::log(quickgrab::util::LogLevel::info,
+                    std::string("HTTP fetch ok: ") + ctx.request.link +
+                    " cost=" + std::to_string(ms) + " ms");
                 auto data = util::extractDataObject(response.body());
                 if (!data || !data->is_object()) {
                     return std::nullopt;
@@ -821,6 +739,9 @@ std::optional<boost::json::object> GrabWorkflow::fetchAddOrderData(const GrabCon
 
     return std::nullopt;
 }
+
+
+
 
 boost::beast::http::request<boost::beast::http::string_body>
 GrabWorkflow::buildPost(const std::string& url,

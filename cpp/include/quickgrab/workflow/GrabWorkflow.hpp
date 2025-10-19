@@ -58,13 +58,17 @@ public:
 
 private:
     using TimerPtr = std::shared_ptr<boost::asio::steady_timer>;
+    //预售预售
+    void scheduleExecution(GrabContext ctx,
+        std::function<void(const GrabResult&)> onFinished);
+
 
     void prepareContext(const model::Request& request, GrabContext& ctx);
 
+
     GrabResult createOrder(const GrabContext& ctx, const boost::json::object& payload);
     GrabResult reConfirmOrder(const GrabContext& ctx, const boost::json::object& payload);
-    void scheduleExecution(GrabContext ctx,
-                           std::function<void(const GrabResult&)> onFinished);
+
 
     void refreshOrderParameters(GrabContext& ctx);
     std::optional<boost::json::object> fetchAddOrderData(const GrabContext& ctx) const;

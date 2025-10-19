@@ -273,8 +273,6 @@ void GrabService::processPending() {
                     std::chrono::milliseconds::zero()
                 ).count();
 
-                util::log(util::LogLevel::info,
-                    "请求 id=" + std::to_string(request.id) + " 将在 " + std::to_string(waitMs) + "ms 内启动处理");
 
                 // 用 worker_ 的执行器创建定时器，避免阻塞线程
                 auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
@@ -460,7 +458,7 @@ void GrabService::handleResult(const model::Request& request, const workflow::Gr
         return;
     }
 
-    if (result.shouldContinue || result.shouldUpdate) {
+    if (result.shouldContinue && result.shouldUpdate) {
         util::log(util::LogLevel::warn, "抢购请求需继续 id=" + std::to_string(request.id));
         requests_.updateStatus(request.id, 4);
     } else {

@@ -514,9 +514,6 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
 
     params["buyer"] = std::move(buyerInfo);
 
-    util::log(util::LogLevel::info,
-              "ID=" + std::to_string(request.id) + " 生成订单参数: " + quickgrab::util::stringifyJson(params));
-
     return params;
 }
 

@@ -19,7 +19,8 @@
 #include <boost/asio/post.hpp>
 #include <iostream>
 
-namespace quickgrab::workflow {
+namespace quickgrab {
+namespace workflow {
 namespace {
 constexpr int kMaxRetries = 3;
 constexpr char kUserAgent[] = "Android/9 WDAPP(WDBuyer/7.6.2) Thor/2.3.25";
@@ -1129,8 +1130,10 @@ GrabWorkflow::buildPost(const std::string& url,
 }
 
 
+} // namespace
 
-} // namespace quickgrab::workflow
+} // namespace workflow
+} // namespace quickgrab
 
 
 

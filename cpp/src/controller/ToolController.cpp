@@ -1,6 +1,7 @@
 #include "quickgrab/controller/ToolController.hpp"
 
 #include <boost/beast/http.hpp>
+#include <boost/beast/string_view.hpp>
 #include <boost/json.hpp>
 
 #include "quickgrab/util/HttpClient.hpp"
@@ -10,8 +11,8 @@
 #include <cmath>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
-#include <iterator>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -24,7 +25,10 @@
 namespace quickgrab {
 namespace controller {
 namespace {
-void sendJsonResponse(server::RequestContext& ctx,
+
+using quickgrab::server::RequestContext;
+
+void sendJsonResponse(RequestContext& ctx,
                       boost::beast::http::status status,
                       const boost::json::value& body) {
     ctx.response.result(status);
@@ -107,8 +111,7 @@ std::string randomHex(std::size_t length) {
     std::string value;
     value.reserve(length);
     for (std::size_t i = 0; i < length; ++i) {
-        int v = dist(rng);
-        value.push_back("0123456789abcdef"[v]);
+        value.push_back("0123456789abcdef"[dist(rng)]);
     }
     return value;
 }
@@ -347,8 +350,8 @@ std::optional<boost::json::object> fetchItemInfo(util::HttpClient& httpClient,
                       "&param=" + urlEncode(boost::json::serialize(paramObj));
 
     std::vector<util::HttpClient::Header> headers{{"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
-                                                             {"Referer", "https://android.weidian.com"},
-                                                             {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76"}};
+                                                  {"Referer", "https://android.weidian.com"},
+                                                  {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}};
 
     auto response = httpClient.fetch("GET",
                                      url,
@@ -513,7 +516,38 @@ int calculateDelayIncrementWithJitter(int stockQuantity) {
     return static_cast<int>(value);
 }
 
+std::string percentDecode(const std::string& input) {
+    std::string decoded;
+    decoded.reserve(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char ch = input[i];
+        if (ch == '%') {
+            if (i + 2 < input.size()) {
+                auto hex = input.substr(i + 1, 2);
+                decoded.push_back(static_cast<char>(std::strtol(hex.c_str(), nullptr, 16)));
+                i += 2;
+            }
+        } else if (ch == '+') {
+            decoded.push_back(' ');
+        } else {
+            decoded.push_back(ch);
+        }
+    }
+    return decoded;
+}
+
 boost::json::object parseLinkPayload(const std::string& link) {
+    auto paramPos = link.find("param=");
+    if (paramPos != std::string::npos) {
+        auto start = paramPos + 6;
+        auto end = link.find('&', start);
+        std::string encoded = link.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        auto payload = percentDecode(encoded);
+        if (!payload.empty()) {
+            return parseJsonObject(payload);
+        }
+    }
+
     auto queryPos = link.find('?');
     if (queryPos == std::string::npos || queryPos + 1 >= link.size()) {
         return {};
@@ -627,6 +661,7 @@ bool looksLikeValidCookie(const std::string& cookies) {
     auto semi = cookies.find(';');
     return eq != std::string::npos && semi != std::string::npos && eq < semi;
 }
+
 } // namespace
 
 ToolController::ToolController(util::HttpClient& httpClient)
@@ -724,6 +759,11 @@ void ToolController::handleFetchItemInfo(server::RequestContext& ctx) {
                     if (auto convey = obj.if_contains("item_convey_info"); convey && convey->is_object()) {
                         if (auto valid = convey->as_object().if_contains("valid_date_info")) {
                             hasExpireDate = valid->is_object();
+                        }
+                    }
+                    if (auto stockNode = obj.if_contains("stock")) {
+                        if (auto stockVal = readInt64(*stockNode)) {
+                            stockQuantity = static_cast<int>(*stockVal);
                         }
                     }
                 }
@@ -883,3 +923,4 @@ void ToolController::handleCheckLatency(server::RequestContext& ctx) {
 
 } // namespace controller
 } // namespace quickgrab
+

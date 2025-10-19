@@ -16,7 +16,8 @@
 #include <string>
 #include <vector>
 
-namespace quickgrab::workflow {
+namespace quickgrab {
+namespace workflow {
 
 struct GrabResult {
     bool success{};
@@ -89,4 +90,5 @@ private:
     proxy::ProxyPool& proxyPool_;
 };
 
-} // namespace quickgrab::workflow
+} // namespace workflow
+} // namespace quickgrab

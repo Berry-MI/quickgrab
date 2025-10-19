@@ -3,13 +3,23 @@
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
 
+#include "quickgrab/util/HttpClient.hpp"
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
+#include <iomanip>
+#include <iterator>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace quickgrab::controller {
 namespace {
@@ -34,6 +44,347 @@ boost::json::object wrapResponse(boost::json::object status, boost::json::object
     response["status"] = std::move(status);
     response["result"] = std::move(result);
     return response;
+}
+
+std::string urlEncode(const std::string& value) {
+    std::ostringstream oss;
+    oss << std::uppercase << std::hex;
+    for (unsigned char c : value) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            oss << static_cast<char>(c);
+        } else if (c == ' ') {
+            oss << '+';
+        } else {
+            oss << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+            oss << std::setw(0);
+        }
+    }
+    return oss.str();
+}
+
+std::string_view trimView(std::string_view view) {
+    auto begin = view.begin();
+    auto end = view.end();
+    while (begin != end && std::isspace(static_cast<unsigned char>(*begin))) {
+        ++begin;
+    }
+    while (end != begin && std::isspace(static_cast<unsigned char>(*(end - 1)))) {
+        --end;
+    }
+    return std::string_view(begin, static_cast<std::size_t>(std::distance(begin, end)));
+}
+
+std::unordered_map<std::string, std::string> parseCookieString(const std::string& cookieStr) {
+    std::unordered_map<std::string, std::string> cookies;
+    std::size_t start = 0;
+    while (start < cookieStr.size()) {
+        auto end = cookieStr.find(';', start);
+        if (end == std::string::npos) {
+            end = cookieStr.size();
+        }
+        auto token = std::string_view(cookieStr.data() + start, end - start);
+        start = end + 1;
+        if (token.empty()) {
+            continue;
+        }
+        auto eq = token.find('=');
+        if (eq == std::string_view::npos) {
+            continue;
+        }
+        auto key = std::string(trimView(token.substr(0, eq)));
+        auto value = std::string(trimView(token.substr(eq + 1)));
+        if (!key.empty()) {
+            cookies.emplace(std::move(key), std::move(value));
+        }
+    }
+    return cookies;
+}
+
+std::string randomHex(std::size_t length) {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> dist(0, 15);
+    std::string value;
+    value.reserve(length);
+    for (std::size_t i = 0; i < length; ++i) {
+        int v = dist(rng);
+        value.push_back("0123456789abcdef"[v]);
+    }
+    return value;
+}
+
+std::string generateAppVersion() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> first(0, 9);
+    std::uniform_int_distribution<int> second(0, 19);
+    std::uniform_int_distribution<int> third(0, 99);
+    std::ostringstream oss;
+    oss << first(rng) << '.' << second(rng) << '.' << third(rng);
+    return oss.str();
+}
+
+std::string generateBrand() {
+    static const std::vector<std::string> brands{"Xiaomi", "HUAWEI", "OPPO", "vivo", "Samsung", "OnePlus"};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, brands.size() - 1);
+    return brands[dist(rng)];
+}
+
+std::string generateBuildNumber() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> month(1, 12);
+    std::uniform_int_distribution<int> day(1, 28);
+    std::uniform_int_distribution<int> seq(0, 999999);
+    std::ostringstream oss;
+    oss << "2025" << std::setw(2) << std::setfill('0') << month(rng)
+        << std::setw(2) << std::setfill('0') << day(rng)
+        << std::setw(6) << std::setfill('0') << seq(rng);
+    return oss.str();
+}
+
+std::string generateChannel() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> dist(0, 9);
+    return "100" + std::to_string(dist(rng));
+}
+
+std::string generateDiskCapacity() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> totalDist(32, 160);
+    int total = totalDist(rng);
+    std::uniform_int_distribution<int> usedDist(0, std::max(total - 1, 1));
+    int used = usedDist(rng);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2)
+        << static_cast<double>(used) << "GB/" << static_cast<double>(total) << "GB";
+    return oss.str();
+}
+
+std::string generateFeature() {
+    return "E|F,H|F,P|F,R|T,W|F";
+}
+
+std::string generateScreenHeight() {
+    static const int heights[] = {1920, 2160, 2400, 2560};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, std::size(heights) - 1);
+    return std::to_string(heights[dist(rng)]);
+}
+
+std::string generateScreenWidth() {
+    static const int widths[] = {1080, 1440, 1600};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, std::size(widths) - 1);
+    return std::to_string(widths[dist(rng)]);
+}
+
+std::string generateLatitude() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<double> dist(18.0, 38.0);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6) << dist(rng);
+    return oss.str();
+}
+
+std::string generateLongitude() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<double> dist(73.0, 123.0);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6) << dist(rng);
+    return oss.str();
+}
+
+std::string generateMac() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> dist(0, 255);
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (int i = 0; i < 6; ++i) {
+        if (i != 0) {
+            oss << ':';
+        }
+        oss << std::setw(2) << dist(rng);
+    }
+    return oss.str();
+}
+
+std::string generateMachineModel() {
+    static const std::vector<std::string> models{"aarch64", "arm64-v8a", "armeabi-v7a", "x86_64"};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, models.size() - 1);
+    return models[dist(rng)];
+}
+
+std::string generateMemory() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> totalDist(4, 12);
+    int total = totalDist(rng);
+    std::uniform_int_distribution<int> usedDist(0, std::max(total - 1, 0));
+    int used = usedDist(rng);
+    std::ostringstream oss;
+    oss << used * 1024 << 'M' << '/' << total * 1024 << 'M';
+    return oss.str();
+}
+
+std::string generateMid() {
+    static const std::vector<std::string> mids{"MI_6", "MI_8", "MI_9", "MI_10", "MI_11", "MI_12"};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> dist(0, mids.size() - 1);
+    return mids[dist(rng)];
+}
+
+std::string generateOsVersion() {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> dist(24, 33);
+    return std::to_string(dist(rng));
+}
+
+std::string generateWifiSsid() {
+    static const std::vector<std::string> prefixes{"JXNUSDI", "CMCC", "ChinaNet", "TP-LINK", "HUAWEI"};
+    static const std::vector<std::string> suffixes{"_stu", "_5G", "_guest", "_home", "_office"};
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<std::size_t> pDist(0, prefixes.size() - 1);
+    std::uniform_int_distribution<std::size_t> sDist(0, suffixes.size() - 1);
+    return "\"" + prefixes[pDist(rng)] + suffixes[sDist(rng)] + "\"";
+}
+
+boost::json::object buildContextFromCookies(const std::string& cookieStr) {
+    auto cookieMap = parseCookieString(cookieStr);
+    boost::json::object context;
+    context["alt"] = "0.0";
+    context["android_id"] = randomHex(16);
+    context["app_status"] = "active";
+    context["appid"] = "com.koudai.weidian.buyer";
+    context["appv"] = generateAppVersion();
+    context["brand"] = generateBrand();
+    context["build"] = generateBuildNumber();
+    context["channel"] = generateChannel();
+    context["cuid"] = randomHex(32);
+    context["disk_capacity"] = generateDiskCapacity();
+    context["feature"] = generateFeature();
+    context["h"] = generateScreenHeight();
+    context["iccid"] = "";
+    context["imei"] = "";
+    context["imsi"] = "";
+    context["lat"] = generateLatitude();
+    context["lon"] = generateLongitude();
+    context["mac"] = generateMac();
+    context["machine_model"] = generateMachineModel();
+    context["memory"] = generateMemory();
+    context["mid"] = generateMid();
+    context["mobile_station"] = "0";
+    context["net_subtype"] = "0_";
+    context["network"] = "WIFI";
+    context["oaid"] = randomHex(16);
+    context["os"] = generateOsVersion();
+    context["platform"] = "android";
+    context["serial_num"] = "";
+    context["w"] = generateScreenWidth();
+    context["wmac"] = generateMac();
+    context["wssid"] = generateWifiSsid();
+    context["is_login"] = cookieMap.contains("is_login") ? cookieMap["is_login"] : "1";
+    context["login_token"] = cookieMap.contains("login_token") ? cookieMap["login_token"] : "";
+    context["duid"] = cookieMap.contains("duid") ? cookieMap["duid"] : "";
+    context["uid"] = cookieMap.contains("uid") ? cookieMap["uid"] : "";
+    context["shop_id"] = cookieMap.contains("duid") ? cookieMap["duid"] : "";
+    context["suid"] = randomHex(32);
+    context["androidVersion"] = "12";
+    context["deviceBrand"] = context["brand"];
+    context["deviceModel"] = context["mid"];
+    return context;
+}
+
+std::optional<std::int64_t> readInt64(const boost::json::value& value) {
+    if (value.is_int64()) {
+        return value.as_int64();
+    }
+    if (value.is_uint64()) {
+        return static_cast<std::int64_t>(value.as_uint64());
+    }
+    if (value.is_double()) {
+        return static_cast<std::int64_t>(value.as_double());
+    }
+    if (value.is_string()) {
+        try {
+            return std::stoll(std::string(value.as_string().c_str()));
+        } catch (const std::exception&) {
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> readBool(const boost::json::value& value) {
+    if (value.is_bool()) {
+        return value.as_bool();
+    }
+    if (value.is_string()) {
+        auto str = std::string(value.as_string().c_str());
+        if (str == "true" || str == "1") {
+            return true;
+        }
+        if (str == "false" || str == "0") {
+            return false;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<boost::json::object> fetchItemInfo(quickgrab::util::HttpClient& httpClient,
+                                                 const std::string& itemId,
+                                                 const std::string& cookies) {
+    auto context = buildContextFromCookies(cookies);
+    boost::json::object paramObj;
+    paramObj["adsk"] = "";
+    paramObj["itemId"] = itemId;
+
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+
+    std::string url = "https://thor.weidian.com/detailmjb/getItemInfo/1.4?timestamp=" +
+                      std::to_string(timestamp) +
+                      "&context=" + urlEncode(boost::json::serialize(context)) +
+                      "&param=" + urlEncode(boost::json::serialize(paramObj));
+
+    std::vector<quickgrab::util::HttpClient::Header> headers{{"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+                                                             {"Referer", "https://android.weidian.com"},
+                                                             {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76"}};
+
+    auto response = httpClient.fetch("GET",
+                                     url,
+                                     headers,
+                                     "",
+                                     "",
+                                     std::chrono::seconds{30},
+                                     false,
+                                     5,
+                                     nullptr,
+                                     false);
+
+    auto body = boost::json::parse(response.body());
+    if (!body.is_object()) {
+        return std::nullopt;
+    }
+    const auto& obj = body.as_object();
+    auto statusIt = obj.if_contains("status");
+    if (!statusIt || !statusIt->is_object()) {
+        return std::nullopt;
+    }
+    auto messageIt = statusIt->as_object().if_contains("message");
+    if (!messageIt || !messageIt->is_string()) {
+        return std::nullopt;
+    }
+    if (messageIt->as_string() != "OK") {
+        return std::nullopt;
+    }
+    auto resultIt = obj.if_contains("result");
+    if (!resultIt || !resultIt->is_object()) {
+        return std::nullopt;
+    }
+    auto modelIt = resultIt->as_object().if_contains("defaultModel");
+    if (!modelIt || !modelIt->is_object()) {
+        return std::nullopt;
+    }
+    return modelIt->as_object();
 }
 
 std::unordered_map<std::string, std::string> parseFormUrlEncoded(const std::string& body) {
@@ -202,6 +553,9 @@ bool looksLikeValidCookie(const std::string& cookies) {
 }
 } // namespace
 
+ToolController::ToolController(quickgrab::util::HttpClient& httpClient)
+    : httpClient_(httpClient) {}
+
 void ToolController::registerRoutes(quickgrab::server::Router& router) {
     auto bindGetNote = [this](auto& ctx) { handleGetNote(ctx); };
     router.addRoute("POST", "/getNote", bindGetNote);
@@ -262,9 +616,18 @@ void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx)
         }
 
         auto param = parseLinkPayload(linkIt->second);
+        if (param.empty()) {
+            throw std::invalid_argument("获取参数失败");
+        }
+
         int categoryCount = 0;
         int stockQuantity = 0;
         bool hasExpireDate = false;
+        bool isFutureSold = false;
+        std::int64_t futureSoldTime = 0;
+        std::string itemId;
+        std::optional<std::int64_t> skuId;
+
         if (auto listIt = param.if_contains("item_list"); listIt && listIt->is_array()) {
             const auto& list = listIt->as_array();
             categoryCount = static_cast<int>(list.size());
@@ -272,10 +635,15 @@ void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx)
                 const auto& item = list.front();
                 if (item.is_object()) {
                     const auto& obj = item.as_object();
-                    if (auto stockIt = obj.if_contains("stock")) {
-                        if (stockIt->is_int64()) {
-                            stockQuantity = static_cast<int>(stockIt->as_int64());
+                    if (auto idIt = obj.if_contains("item_id")) {
+                        if (idIt->is_string()) {
+                            itemId = std::string(idIt->as_string().c_str());
+                        } else if (auto idNum = readInt64(*idIt)) {
+                            itemId = std::to_string(*idNum);
                         }
+                    }
+                    if (auto skuIt = obj.if_contains("item_sku_id")) {
+                        skuId = readInt64(*skuIt);
                     }
                     if (auto convey = obj.if_contains("item_convey_info"); convey && convey->is_object()) {
                         if (auto valid = convey->as_object().if_contains("valid_date_info")) {
@@ -286,13 +654,102 @@ void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx)
             }
         }
 
+        if (itemId.empty()) {
+            throw std::invalid_argument("缺少商品ID");
+        }
+
+        auto itemInfo = fetchItemInfo(httpClient_, itemId, cookieIt->second);
+        if (!itemInfo) {
+            throw std::runtime_error("获取商品信息失败");
+        }
+
+        const auto& model = *itemInfo;
+        const boost::json::object* itemInfoObj = nullptr;
+        if (auto infoIt = model.if_contains("itemInfo"); infoIt && infoIt->is_object()) {
+            itemInfoObj = &infoIt->as_object();
+        }
+
+        if (skuId && *skuId != 0) {
+            auto skuProps = model.if_contains("skuProperties");
+            if (!skuProps || !skuProps->is_object()) {
+                throw std::runtime_error("未找到SKU信息");
+            }
+            auto skuList = skuProps->as_object().if_contains("sku");
+            if (!skuList || !skuList->is_array()) {
+                throw std::runtime_error("未找到SKU信息");
+            }
+            bool matched = false;
+            for (const auto& skuValue : skuList->as_array()) {
+                if (!skuValue.is_object()) {
+                    continue;
+                }
+                const auto& skuObj = skuValue.as_object();
+                auto idNode = skuObj.if_contains("id");
+                if (!idNode) {
+                    continue;
+                }
+                auto idValue = readInt64(*idNode);
+                if (!idValue || *idValue != *skuId) {
+                    continue;
+                }
+                if (auto stockNode = skuObj.if_contains("stock")) {
+                    if (auto stockVal = readInt64(*stockNode)) {
+                        stockQuantity = static_cast<int>(*stockVal);
+                    }
+                }
+                matched = true;
+                break;
+            }
+            if (!matched) {
+                throw std::runtime_error("未找到对应的SKU信息");
+            }
+        } else if (itemInfoObj) {
+            if (auto stockNode = itemInfoObj->if_contains("stock")) {
+                if (auto stockVal = readInt64(*stockNode)) {
+                    stockQuantity = static_cast<int>(*stockVal);
+                }
+            }
+        }
+
+        if (itemInfoObj) {
+            if (auto ticketNode = itemInfoObj->if_contains("ticketItemInfo"); ticketNode && ticketNode->is_object()) {
+                if (auto expireNode = ticketNode->as_object().if_contains("expireDate")) {
+                    if ((expireNode->is_string() && !std::string(expireNode->as_string().c_str()).empty()) ||
+                        (expireNode->is_object() && !expireNode->as_object().empty())) {
+                        hasExpireDate = true;
+                    }
+                }
+            }
+
+            if (auto flagNode = itemInfoObj->if_contains("flag"); flagNode && flagNode->is_object()) {
+                if (auto futureNode = flagNode->as_object().if_contains("isFutureSold")) {
+                    if (auto future = readBool(*futureNode)) {
+                        isFutureSold = *future;
+                    }
+                }
+            }
+
+            if (auto futureTimeNode = itemInfoObj->if_contains("futureSoldTime")) {
+                if (auto ts = readInt64(*futureTimeNode)) {
+                    futureSoldTime = *ts;
+                }
+            }
+        }
+
+        if (!isFutureSold) {
+            futureSoldTime = 0;
+        }
+
         int delayIncrement = calculateDelayIncrementWithJitter(stockQuantity);
 
         boost::json::object result;
         result["delayIncrement"] = delayIncrement;
         result["hasExpireDate"] = hasExpireDate;
-        result["isFutureSold"] = false;
+        result["isFutureSold"] = isFutureSold;
         result["categoryCount"] = categoryCount;
+        if (isFutureSold && futureSoldTime > 0) {
+            result["futureSoldTime"] = futureSoldTime;
+        }
 
         auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
         sendJsonResponse(ctx, boost::beast::http::status::ok, response);

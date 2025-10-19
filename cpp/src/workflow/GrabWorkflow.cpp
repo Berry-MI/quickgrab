@@ -515,9 +515,86 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
                   (ctx.autoPick ? " [自动选取]" : "") +
                   " 将在 " + std::to_string(delay) + "ms 后开始抢购");
 
+    auto tryApplyOrderParameters = [&](GrabContext& context,
+                                       const boost::json::object& data,
+                                       bool includeInvalid,
+                                       int maxAttempts,
+                                       std::chrono::milliseconds initialDelay,
+                                       std::chrono::milliseconds maxDelay,
+                                       std::string_view successMsg,
+                                       std::string_view retryMsg,
+                                       std::string_view giveUpMsg) {
+        auto waitTime = initialDelay;
+        for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+            if (auto params = quickgrab::util::generateOrderParameters(
+                    context.request, data, includeInvalid)) {
+                context.request.orderParameters = *params;
+                context.request.orderParametersRaw =
+                    quickgrab::util::stringifyJson(*params);
+                util::log(util::LogLevel::info,
+                          "请求ID=" + std::to_string(context.request.id) + " " +
+                              std::string(successMsg));
+                return true;
+            }
+
+            if (attempt + 1 < maxAttempts) {
+                util::log(util::LogLevel::warn,
+                          "请求ID=" + std::to_string(context.request.id) + " " +
+                              std::string(retryMsg));
+                std::this_thread::sleep_for(waitTime);
+                waitTime *= 2;
+                if (waitTime > maxDelay) {
+                    waitTime = maxDelay;
+                }
+            }
+        }
+
+        util::log(util::LogLevel::error,
+                  "请求ID=" + std::to_string(context.request.id) + " " +
+                      std::string(giveUpMsg));
+        return false;
+    };
+
+    auto prepareInitialOrderParameters = [&](GrabContext& context) {
+        if (context.quickMode) {
+            util::log(util::LogLevel::info,
+                      "请求ID=" + std::to_string(context.request.id) +
+                          " 使用快速模式，跳过重新生成订单参数");
+            return;
+        }
+
+        try {
+            if (auto dataObj = fetchAddOrderData(context)) {
+                tryApplyOrderParameters(context,
+                                        *dataObj,
+                                        true,
+                                        3,
+                                        std::chrono::milliseconds(100),
+                                        std::chrono::milliseconds(200),
+                                        "生成订单参数成功",
+                                        "生成订单参数失败，等待重试",
+                                        "生成订单参数失败，将使用现有参数继续执行");
+            } else {
+                util::log(util::LogLevel::warn,
+                          "请求ID=" + std::to_string(context.request.id) +
+                              " 无法获取下单数据，将尝试使用已有参数");
+            }
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::error,
+                      "请求ID=" + std::to_string(context.request.id) +
+                          " 生成订单参数过程出现严重错误: " + ex.what());
+        }
+    };
+
+    prepareInitialOrderParameters(ctx);
+
     auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
     timer->expires_after(std::chrono::milliseconds(delay));
-    timer->async_wait([this, ctx = std::move(ctx), onFinished = std::move(onFinished), timer](const boost::system::error_code& ec) mutable {
+    timer->async_wait([this,
+                       ctx = std::move(ctx),
+                       onFinished = std::move(onFinished),
+                       timer,
+                       tryApplyOrderParameters](const boost::system::error_code& ec) mutable {
         if (ec) {
             GrabResult cancelled;
             cancelled.success = false;
@@ -532,59 +609,34 @@ void GrabWorkflow::scheduleExecution(GrabContext ctx,
         // 由于定时器绑定到了 worker_ 的执行器，抢购流程从延时等待开始便已经在工作线程
         // 上排队执行。这样可以确保单个请求在 worker_ 池中始终只占用一个线程，避免了
         // 先由 io_context 线程触发再切换到 worker_ 造成的双重占用问题。
-
-
-        auto tryApplyOrderParameters = [&](GrabContext& context,
-                                           const boost::json::object& data,
-                                           bool includeInvalid,
-                                           int maxAttempts,
-                                           std::chrono::milliseconds initialDelay,
-                                           std::chrono::milliseconds maxDelay,
-                                           std::string_view successMsg,
-                                           std::string_view retryMsg,
-                                           std::string_view giveUpMsg) {
-            auto waitTime = initialDelay;
-            for (int attempt = 0; attempt < maxAttempts; ++attempt) {
-                if (auto params = quickgrab::util::generateOrderParameters(
-                        context.request, data, includeInvalid)) {
-                    context.request.orderParameters = *params;
-                    context.request.orderParametersRaw =
-                        quickgrab::util::stringifyJson(*params);
-                    util::log(util::LogLevel::info,
-                              "请求ID=" + std::to_string(context.request.id) + " " +
-                                  std::string(successMsg));
-                    return true;
-                }
-
-                if (attempt + 1 < maxAttempts) {
-                    util::log(util::LogLevel::warn,
-                              "请求ID=" + std::to_string(context.request.id) + " " +
-                                  std::string(retryMsg));
-                    std::this_thread::sleep_for(waitTime);
-                    waitTime *= 2;
-                    if (waitTime > maxDelay) {
-                        waitTime = maxDelay;
+        auto ensureReason = [](boost::json::object& payload) {
+            static constexpr const char* kReason = "页面来源";
+            if (auto* reason = payload.if_contains("reason")) {
+                if (reason->is_string()) {
+                    if (reason->as_string().empty()) {
+                        payload["reason"] = kReason;
                     }
+                } else {
+                    payload["reason"] = kReason;
                 }
+            } else {
+                payload["reason"] = kReason;
             }
-
-            util::log(util::LogLevel::error,
-                      "请求ID=" + std::to_string(context.request.id) + " " +
-                          std::string(giveUpMsg));
-            return false;
         };
 
-        auto preparePayload = [this](GrabContext& context) {
+        auto preparePayload = [this, ensureReason](GrabContext& context) {
             boost::json::object payload;
 
             if (context.request.orderParameters.is_object()) {
                 payload = context.request.orderParameters.as_object();
+                std::cout << boost::json::serialize(payload) << std::endl;
             }
+
+
             context.request.orderParametersRaw = quickgrab::util::stringifyJson(payload);
             return payload;
         };
 
-        refreshOrderParameters(ctx);
         boost::json::object payload = preparePayload(ctx);
 
         GrabContext mainCtx = ctx;

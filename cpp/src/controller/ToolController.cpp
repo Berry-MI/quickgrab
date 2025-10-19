@@ -512,35 +512,81 @@ int calculateDelayIncrementWithJitter(int stockQuantity) {
     return static_cast<int>(value);
 }
 
-std::string percentDecode(const std::string& input) {
-    std::string decoded;
-    decoded.reserve(input.size());
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        char ch = input[i];
-        if (ch == '%') {
-            if (i + 2 < input.size()) {
-                auto hex = input.substr(i + 1, 2);
-                decoded.push_back(static_cast<char>(std::strtol(hex.c_str(), nullptr, 16)));
-                i += 2;
-            }
-        } else if (ch == '+') {
-            decoded.push_back(' ');
-        } else {
-            decoded.push_back(ch);
-        }
-    }
-    return decoded;
-}
-
 boost::json::object parseLinkPayload(const std::string& link) {
-    auto paramPos = link.find("param=");
-    if (paramPos == std::string::npos) {
+    auto queryPos = link.find('?');
+    if (queryPos == std::string::npos) {
         return {};
     }
-    auto start = paramPos + 6;
-    auto end = link.find('&', start);
-    std::string encoded = link.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    return parseJsonObject(percentDecode(encoded));
+
+    auto params = parseFormUrlEncoded(link.substr(queryPos + 1));
+    auto itemsIt = params.find("items");
+    auto sourceIt = params.find("source_id");
+    if (itemsIt == params.end() || sourceIt == params.end()) {
+        return {};
+    }
+
+    boost::json::array itemList;
+    std::string_view itemsView(itemsIt->second);
+    std::size_t start = 0;
+    while (start <= itemsView.size()) {
+        auto end = itemsView.find(',', start);
+        if (end == std::string_view::npos) {
+            end = itemsView.size();
+        }
+        auto token = itemsView.substr(start, end - start);
+        start = end + 1;
+        if (token.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> parts;
+        std::size_t partStart = 0;
+        while (partStart <= token.size()) {
+            auto partEnd = token.find('_', partStart);
+            if (partEnd == std::string_view::npos) {
+                parts.emplace_back(token.substr(partStart));
+                break;
+            }
+            parts.emplace_back(token.substr(partStart, partEnd - partStart));
+            partStart = partEnd + 1;
+        }
+
+        if (parts.size() < 4) {
+            continue;
+        }
+
+        int quantity = 0;
+        try {
+            quantity = std::stoi(parts[1]);
+        } catch (const std::exception&) {
+            continue;
+        }
+
+        boost::json::object item;
+        item["item_id"] = parts[0];
+        item["quantity"] = quantity;
+        item["price_type"] = parts[2];
+        auto skuId = parts[3];
+        if (skuId.empty() || skuId == "__") {
+            item["item_sku_id"] = "0";
+        } else {
+            item["item_sku_id"] = skuId;
+        }
+        item["item_type"] = "0";
+        item["use_installment"] = 1;
+        itemList.emplace_back(std::move(item));
+    }
+
+    if (itemList.empty()) {
+        return {};
+    }
+
+    boost::json::object payload;
+    payload["buyer"] = boost::json::object{};
+    payload["channel"] = "maijiaban";
+    payload["item_list"] = std::move(itemList);
+    payload["source_id"] = sourceIt->second;
+    return payload;
 }
 
 bool looksLikeValidCookie(const std::string& cookies) {

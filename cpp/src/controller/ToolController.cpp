@@ -838,6 +838,9 @@ void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx)
             result["futureSoldTime"] = futureSoldTime;
         }
         result["categoryCount"] = categoryCount;
+        if (isFutureSold && futureSoldTime > 0) {
+            result["futureSoldTime"] = futureSoldTime;
+        }
 
         auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
         sendJsonResponse(ctx, boost::beast::http::status::ok, response);

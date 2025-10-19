@@ -65,13 +65,18 @@ std::string urlEncode(const std::string& value) {
 std::string_view trimView(std::string_view view) {
     auto begin = view.begin();
     auto end = view.end();
+
     while (begin != end && std::isspace(static_cast<unsigned char>(*begin))) {
         ++begin;
     }
     while (end != begin && std::isspace(static_cast<unsigned char>(*(end - 1)))) {
         --end;
     }
-    return std::string_view(begin, static_cast<std::size_t>(std::distance(begin, end)));
+
+    return std::string_view(
+        view.data() + std::distance(view.begin(), begin),
+        static_cast<std::size_t>(std::distance(begin, end))
+    );
 }
 
 std::unordered_map<std::string, std::string> parseCookieString(const std::string& cookieStr) {
@@ -651,159 +656,198 @@ void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {
 
 void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx) {
     try {
+        // 1) 取表单参数
         auto form = parseFormUrlEncoded(ctx.request.body());
-        auto linkIt = form.find("link");
-        auto cookieIt = form.find("cookies");
-        if (linkIt == form.end() || linkIt->second.empty()) {
-            throw std::invalid_argument("缺少链接参数");
-        }
-        if (cookieIt == form.end() || cookieIt->second.empty()) {
-            throw std::invalid_argument("缺少Cookies参数");
-        }
-
-        auto param = parseLinkPayload(linkIt->second);
-        if (param.empty()) {
-            throw std::invalid_argument("获取参数失败");
+        const auto linkIt = form.find("link");
+        const auto cookieIt = form.find("cookies");
+        if (linkIt == form.end() || linkIt->second.empty() ||
+            cookieIt == form.end() || cookieIt->second.empty()) {
+            // Java 的习惯：参数无法解析统一走 201
+            auto resp = wrapResponse(makeStatus(201, "获取参数失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+            return;
         }
 
-        int categoryCount = 0;
-        int stockQuantity = 0;
-        bool hasExpireDate = false;
-        bool isFutureSold = false;
-        std::int64_t futureSoldTime = 0;
+        // 2) link → paramNode（等价于 Java 的 CommonUtil.convertLinkToJson）
+        boost::json::object paramNode = parseLinkPayload(linkIt->second);
+        if (paramNode.empty()) {
+            auto resp = wrapResponse(makeStatus(201, "获取参数失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+            return;
+        }
+
+        // 3) 读取 itemId 与 skuId（取第一项）
         std::string itemId;
-        std::optional<std::int64_t> skuId;
+        std::int64_t skuId = 0;
+        int categoryCount = 0;
 
-        if (auto listIt = param.if_contains("item_list"); listIt && listIt->is_array()) {
-            const auto& list = listIt->as_array();
-            categoryCount = static_cast<int>(list.size());
-            if (!list.empty()) {
-                const auto& item = list.front();
-                if (item.is_object()) {
-                    const auto& obj = item.as_object();
-                    if (auto idIt = obj.if_contains("item_id")) {
-                        if (idIt->is_string()) {
-                            itemId = std::string(idIt->as_string().c_str());
-                        } else if (auto idNum = readInt64(*idIt)) {
-                            itemId = std::to_string(*idNum);
-                        }
+        if (auto* list = paramNode.if_contains("item_list"); list && list->is_array() && !list->as_array().empty()) {
+            const auto& first = list->as_array().front();
+            categoryCount = static_cast<int>(list->as_array().size());
+            if (first.is_object()) {
+                const auto& obj = first.as_object();
+                // item_id
+                if (auto* id = obj.if_contains("item_id")) {
+                    if (id->is_string()) {
+                        itemId = std::string(id->as_string().c_str());
                     }
-                    if (auto skuIt = obj.if_contains("item_sku_id")) {
-                        skuId = readInt64(*skuIt);
+                    else if (id->is_int64()) {
+                        itemId = std::to_string(id->as_int64());
                     }
-                    if (auto convey = obj.if_contains("item_convey_info"); convey && convey->is_object()) {
-                        if (auto valid = convey->as_object().if_contains("valid_date_info")) {
-                            hasExpireDate = valid->is_object();
-                        }
+                }
+                // item_sku_id
+                if (auto* sid = obj.if_contains("item_sku_id")) {
+                    if (sid->is_int64()) skuId = sid->as_int64();
+                    else if (sid->is_string()) {
+                        try { skuId = std::stoll(std::string(sid->as_string().c_str())); }
+                        catch (...) {}
                     }
                 }
             }
         }
 
         if (itemId.empty()) {
-            throw std::invalid_argument("缺少商品ID");
+            auto resp = wrapResponse(makeStatus(201, "获取参数失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+            return;
         }
 
-        auto itemInfo = fetchItemInfo(httpClient_, itemId, cookieIt->second);
-        if (!itemInfo) {
-            throw std::runtime_error("获取商品信息失败");
+        // 4) 获取商品信息（等价于 Java 的 NetworkUtil.getItemInfo）
+        auto itemInfoOpt = fetchItemInfo(httpClient_, itemId, cookieIt->second);
+        if (!itemInfoOpt) {
+            auto resp = wrapResponse(makeStatus(202, "获取商品信息失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+            return;
         }
+        const auto& dataObj = *itemInfoOpt;
 
-        const auto& model = *itemInfo;
-        const boost::json::object* itemInfoObj = nullptr;
-        if (auto infoIt = model.if_contains("itemInfo"); infoIt && infoIt->is_object()) {
-            itemInfoObj = &infoIt->as_object();
-        }
-
-        if (skuId && *skuId != 0) {
-            auto skuProps = model.if_contains("skuProperties");
-            if (!skuProps || !skuProps->is_object()) {
-                throw std::runtime_error("未找到SKU信息");
-            }
-            auto skuList = skuProps->as_object().if_contains("sku");
+        // 5) 计算库存
+        int stockQuantity = 0;
+        if (skuId != 0) {
+            // skuProperties.sku 数组里查找 id = skuId
+            const auto* skuProps = dataObj.if_contains("skuProperties");
+            const auto* skuList = (skuProps && skuProps->is_object())
+                ? skuProps->as_object().if_contains("sku")
+                : nullptr;
             if (!skuList || !skuList->is_array()) {
-                throw std::runtime_error("未找到SKU信息");
+                auto resp = wrapResponse(makeStatus(203, "未找到对应的SKU信息"), {});
+                sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+                return;
             }
             bool matched = false;
-            for (const auto& skuValue : skuList->as_array()) {
-                if (!skuValue.is_object()) {
-                    continue;
-                }
-                const auto& skuObj = skuValue.as_object();
-                auto idNode = skuObj.if_contains("id");
-                if (!idNode) {
-                    continue;
-                }
-                auto idValue = readInt64(*idNode);
-                if (!idValue || *idValue != *skuId) {
-                    continue;
-                }
-                if (auto stockNode = skuObj.if_contains("stock")) {
-                    if (auto stockVal = readInt64(*stockNode)) {
-                        stockQuantity = static_cast<int>(*stockVal);
+            for (const auto& sku : skuList->as_array()) {
+                if (!sku.is_object()) continue;
+                const auto& so = sku.as_object();
+                std::int64_t idVal = 0;
+                if (auto* id = so.if_contains("id")) {
+                    if (id->is_int64()) idVal = id->as_int64();
+                    else if (id->is_string()) {
+                        try { idVal = std::stoll(std::string(id->as_string().c_str())); }
+                        catch (...) {}
                     }
                 }
-                matched = true;
-                break;
+                if (idVal == skuId) {
+                    if (auto* st = so.if_contains("stock"); st && st->is_int64()) {
+                        stockQuantity = static_cast<int>(st->as_int64());
+                        matched = true;
+                        break;
+                    }
+                }
             }
             if (!matched) {
-                throw std::runtime_error("未找到对应的SKU信息");
+                auto resp = wrapResponse(makeStatus(203, "未找到对应的SKU信息"), {});
+                sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+                return;
             }
-        } else if (itemInfoObj) {
-            if (auto stockNode = itemInfoObj->if_contains("stock")) {
-                if (auto stockVal = readInt64(*stockNode)) {
-                    stockQuantity = static_cast<int>(*stockVal);
-                }
+        }
+        else {
+            // itemInfo.stock
+            const auto* itemInfo = dataObj.if_contains("itemInfo");
+            if (!itemInfo || !itemInfo->is_object()) {
+                auto resp = wrapResponse(makeStatus(202, "获取商品信息失败"), {});
+                sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+                return;
+            }
+            const auto& infoObj = itemInfo->as_object();
+            if (auto* st = infoObj.if_contains("stock"); st && st->is_int64()) {
+                stockQuantity = static_cast<int>(st->as_int64());
+            }
+            else {
+                // 与 Java 行为保持：若缺失也视为信息不足
+                auto resp = wrapResponse(makeStatus(202, "获取商品信息失败"), {});
+                sendJsonResponse(ctx, boost::beast::http::status::bad_request, resp);
+                return;
             }
         }
 
-        if (itemInfoObj) {
-            if (auto ticketNode = itemInfoObj->if_contains("ticketItemInfo"); ticketNode && ticketNode->is_object()) {
-                if (auto expireNode = ticketNode->as_object().if_contains("expireDate")) {
-                    if ((expireNode->is_string() && !std::string(expireNode->as_string().c_str()).empty()) ||
-                        (expireNode->is_object() && !expireNode->as_object().empty())) {
-                        hasExpireDate = true;
-                    }
-                }
-            }
-
-            if (auto flagNode = itemInfoObj->if_contains("flag"); flagNode && flagNode->is_object()) {
-                if (auto futureNode = flagNode->as_object().if_contains("isFutureSold")) {
-                    if (auto future = readBool(*futureNode)) {
-                        isFutureSold = *future;
-                    }
-                }
-            }
-
-            if (auto futureTimeNode = itemInfoObj->if_contains("futureSoldTime")) {
-                if (auto ts = readInt64(*futureTimeNode)) {
-                    futureSoldTime = *ts;
-                }
-            }
-        }
-
-        if (!isFutureSold) {
-            futureSoldTime = 0;
-        }
-
+        // 6) 计算延时增量
         int delayIncrement = calculateDelayIncrementWithJitter(stockQuantity);
 
+        // 7) 票务/有效期字段
+        bool hasExpireDate = false;
+        boost::json::value expireDateParsed; // 可选：解析后的结构
+        const auto* itemInfo = dataObj.if_contains("itemInfo");
+        if (itemInfo && itemInfo->is_object()) {
+            const auto& infoObj = itemInfo->as_object();
+            if (auto* ticket = infoObj.if_contains("ticketItemInfo"); ticket && ticket->is_object()) {
+                const auto& t = ticket->as_object();
+                if (auto* expire = t.if_contains("expireDate")) {
+                    hasExpireDate = true;
+                    // Java: CommonUtil.parseExpireDate(expireDate)
+                    if (expire->is_string()) {
+                        std::string expStr = std::string(expire->as_string().c_str());
+                        // 如果你有解析工具函数，替换下面这行：
+                        // expireDateParsed = quickgrab::util::parseExpireDate(expStr);
+                        // 这里先原样返回字符串作为兼容：
+                        expireDateParsed = boost::json::value(expStr);
+                    }
+                    else if (expire->is_object()) {
+                        expireDateParsed = *expire; // 已经是对象，直接透传
+                    }
+                }
+            }
+        }
+
+        // 8) 预售字段
+        bool isFutureSold = false;
+        std::int64_t futureSoldTime = 0;
+        if (itemInfo && itemInfo->is_object()) {
+            const auto& infoObj = itemInfo->as_object();
+            if (auto* flag = infoObj.if_contains("flag"); flag && flag->is_object()) {
+                if (auto* fs = flag->as_object().if_contains("isFutureSold"); fs) {
+                    if (fs->is_bool()) isFutureSold = fs->as_bool();
+                    else if (fs->is_int64()) isFutureSold = (fs->as_int64() != 0);
+                }
+            }
+            if (isFutureSold) {
+                if (auto* ts = infoObj.if_contains("futureSoldTime"); ts && ts->is_int64()) {
+                    futureSoldTime = ts->as_int64();
+                }
+            }
+        }
+
+        // 9) 组织结果（与 Java 字段一致）
         boost::json::object result;
         result["delayIncrement"] = delayIncrement;
         result["hasExpireDate"] = hasExpireDate;
+        if (hasExpireDate && !expireDateParsed.is_null()) {
+            result["expireDate"] = expireDateParsed; // 与 Java: resultNode.set("expireDate", item_convey_info)
+        }
         result["isFutureSold"] = isFutureSold;
-        result["categoryCount"] = categoryCount;
         if (isFutureSold && futureSoldTime > 0) {
             result["futureSoldTime"] = futureSoldTime;
         }
+        result["categoryCount"] = categoryCount;
 
         auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
         sendJsonResponse(ctx, boost::beast::http::status::ok, response);
-    } catch (const std::exception& ex) {
-        auto response = wrapResponse(makeStatus(400, ex.what()), {});
+    }
+    catch (const std::exception& ex) {
+        auto response = wrapResponse(makeStatus(204, ex.what()), {});
         sendJsonResponse(ctx, boost::beast::http::status::bad_request, response);
     }
 }
+
 
 void ToolController::handleCheckCookies(quickgrab::server::RequestContext& ctx) {
     auto params = parseQueryParameters(ctx.request.target());

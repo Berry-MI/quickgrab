@@ -81,8 +81,9 @@ long computeDelay(const GrabContext& ctx) {
     const auto start = ctx.request.startTime;
     auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(start - now).count();
     const auto needDelay = ctx.request.delay;
-    long delay = static_cast<long>(needDelay - ctx.adjustedFactor - ctx.processingTime);
-    long timeRemaining = std::max<long>(0, static_cast<long>(delta) + delay);
+    long delay = static_cast<long>(needDelay /*- ctx.adjustedFactor - ctx.processingTime*/);
+    long advanceMs = 100; //提前启动
+    long timeRemaining = std::max<long>(0, static_cast<long>(delta) + delay - advanceMs);
     return timeRemaining;
 }
 
@@ -514,20 +515,23 @@ void GrabWorkflow::scheduleExecution(
     GrabContext ctx,
     std::function<void(const GrabResult&)> onFinished
 ) {
-    const auto delay = computeDelay(ctx);
+    refreshOrderParameters(ctx);  //先准备一次请求参数，让第一次请求可以直接调用
+    const auto delay_ms = computeDelay(ctx); 
+    const auto target_tp = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay_ms);
+
     util::log(
         util::LogLevel::info,
         "请求ID=" + std::to_string(ctx.request.id) +
         (ctx.quickMode ? " [快速模式]" : "") +
         (ctx.steadyOrder ? " [稳定抢购]" : "") +
         (ctx.autoPick ? " [自动选取]" : "") +
-        " 将在 " + std::to_string(delay) + "ms 后开始抢购"
+        " 将在 " + std::to_string(delay_ms) + "ms 后开始抢购"
     );
 
-    refreshOrderParameters(ctx);
+
 
     auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
-    timer->expires_after(std::chrono::milliseconds(delay));
+    timer->expires_at(target_tp);
 
     timer->async_wait(
         [this, ctx = std::move(ctx), onFinished = std::move(onFinished), timer]
@@ -555,11 +559,21 @@ void GrabWorkflow::scheduleExecution(
             mainCtx.domain = "thor.weidian.com";
 
             auto result = createOrder(mainCtx, ctx.request.orderParameters.as_object());
+            if (result.success) {
+                result.statusCode = 1;
+            }
             int attemptCount = 1;
+            // ==== 指数退避参数（仅用于普通重试分支）====
+            std::chrono::milliseconds baseDelay{ 120 };    // 初始等待
+            double backoffFactor = 2.0;                  // 指数倍数
+            std::chrono::milliseconds maxDelay{ 900 };     // 最大等待
+            double jitterRatio = 0.10;                   // 抖动比例 ±10%
+            auto currentDelay = baseDelay;
+            int consecutivePlainRetries = 0;
 
-            while (result.shouldContinue && attemptCount < 10) {
+            while (result.shouldContinue && attemptCount < 20) {
                 if (result.shouldUpdate) {
-                    // （可选）对齐 Java：确认前等待 300ms
+
                     // std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
                     const auto attemptStart = std::chrono::steady_clock::now();
@@ -572,8 +586,7 @@ void GrabWorkflow::scheduleExecution(
 
                     // 稳定节流：确保“确认→下单”至少 1s
                     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() - attemptStart
-                    );
+                        std::chrono::steady_clock::now() - attemptStart);
                     if (elapsed.count() < 1000) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsed.count()));
                     }
@@ -583,11 +596,41 @@ void GrabWorkflow::scheduleExecution(
                     updatedCtx.domain = randomDomain(ctx.extension);
 
                     result = createOrder(updatedCtx, ctx.request.orderParameters.as_object());
+                    if (!result.success) result.statusCode = 2;
+
                 }
                 else {
-                    // 普通重试分支：轻微节流
-                    std::this_thread::sleep_for(std::chrono::milliseconds(985));
+                    // —— 普通重试分支：指数退避 + 抖动 ——
+                    // 计算带抖动的等待时间：currentDelay * (1 ± jitter)
+                    auto delayMs = currentDelay.count();
+                    auto jitterSpan = static_cast<long>(delayMs * jitterRatio);
+                    if (jitterSpan > 0) {
+                        // [-jitterSpan, +jitterSpan]
+                        static thread_local std::mt19937 rng{ std::random_device{}() };
+                        std::uniform_int_distribution<long> dist(-jitterSpan, jitterSpan);
+                        delayMs += dist(rng);
+                        if (delayMs < 0) delayMs = 0;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+
                     result = createOrder(ctx, ctx.request.orderParameters.as_object());
+                    if (!result.success) result.statusCode = 2;
+
+                    // 指数退避推进（仅在普通重试连续时推进；若 next 次进入更新分支会被重置）
+                    ++consecutivePlainRetries;
+                    if (result.shouldContinue && !result.shouldUpdate) {
+                        // 还在普通重试轨道 → 放大 currentDelay
+                        auto next = std::chrono::milliseconds(
+                            static_cast<long>(currentDelay.count() * backoffFactor));
+                        if (next > maxDelay) next = maxDelay;
+                        currentDelay = next;
+                    }
+                    else {
+                        // 出现更新/成功/终止 → 重置退避
+                        consecutivePlainRetries = 0;
+                        currentDelay = baseDelay;
+                    }
+
                 }
 
                 ++attemptCount;
@@ -601,6 +644,7 @@ void GrabWorkflow::scheduleExecution(
                     responseObj["isContinue"] = false;
                 }
             }
+            if (!result.success) result.statusCode = 3; // 最终失败再标
             result.attempts = attemptCount;
 
             // 切回 io_ 执行回调
@@ -636,7 +680,8 @@ void GrabWorkflow::schedulePick(
             if (ec) {
                 GrabResult cancelled;
                 cancelled.success = false;
-                cancelled.statusCode = 499;
+                //cancelled.statusCode = 499;
+                cancelled.statusCode = 3;
                 cancelled.message = ec.message();
                 boost::asio::post(
                     io_,
@@ -846,6 +891,15 @@ void GrabWorkflow::schedulePick(
                             createCtx.assignedProxy = overrideProxy;
                             createCtx.proxyAffinity = affinity;
                             auto attempt = createOrder(createCtx, *paramsObj);
+                            if (attempt.success) {
+                                attempt.statusCode = 1;
+                            }
+                            else if (attempt.shouldContinue || attempt.shouldUpdate) {
+                                attempt.statusCode = 2;
+                            }
+                            else {
+                                attempt.statusCode = 3;
+                            }
                             if (attempt.response.is_object()) {
                                 auto& responseObj = attempt.response.as_object();
                                 responseObj["count"] = count;
@@ -917,6 +971,15 @@ void GrabWorkflow::schedulePick(
                                 createCtx.assignedProxy = overrideProxy;
                                 createCtx.proxyAffinity = affinity;
                                 auto attempt = createOrder(createCtx, *paramsObj);
+                                if (attempt.success) {
+                                    attempt.statusCode = 1;
+                                }
+                                else if (attempt.shouldContinue || attempt.shouldUpdate) {
+                                    attempt.statusCode = 2;
+                                }
+                                else {
+                                    attempt.statusCode = 3;
+                                }
                                 if (attempt.response.is_object()) {
                                     auto& responseObj = attempt.response.as_object();
                                     responseObj["count"] = count;

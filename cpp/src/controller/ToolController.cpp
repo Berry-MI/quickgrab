@@ -20,7 +20,10 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-
+#include <quickgrab/util/JsonUtil.hpp>
+#include <quickgrab/util/CommonUtil.hpp>
+#include <quickgrab/util/WeidianParser.hpp>
+#include <quickgrab/util/Logging.hpp>
 namespace quickgrab::controller {
 namespace {
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,
@@ -627,32 +630,182 @@ void ToolController::registerRoutes(quickgrab::server::Router& router) {
 
 void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {
     try {
-        auto json = boost::json::parse(ctx.request.body());
-        if (!json.is_object()) {
+        // 解析请求体
+        auto bodyJson = boost::json::parse(ctx.request.body());
+        if (!bodyJson.is_object()) {
             throw std::invalid_argument("payload must be JSON object");
         }
-        const auto& payload = json.as_object();
+        const auto& payload = bodyJson.as_object();
 
-        boost::json::object customInfo;
-        if (auto it = payload.if_contains("orderTemplate")) {
-            customInfo = ensureJsonObject(*it);
-        } else if (auto it = payload.if_contains("orderParameters")) {
-            auto parsed = ensureJsonObject(*it);
-            if (auto info = parsed.if_contains("custom_info"); info && info->is_object()) {
-                customInfo = info->as_object();
-            }
+        // 从前端拿必要参数：cookies / link（与 Java Requests 等价字段）
+        const auto* cookiesVal = payload.if_contains("cookies");
+        const auto* linkVal = payload.if_contains("link");
+        if (!cookiesVal || !cookiesVal->is_string() || cookiesVal->as_string().empty()) {
+            throw std::invalid_argument("缺少 cookies");
+        }
+        if (!linkVal || !linkVal->is_string() || linkVal->as_string().empty()) {
+            throw std::invalid_argument("缺少 link");
+        }
+        const std::string cookies = std::string(cookiesVal->as_string().c_str());
+        const std::string link = std::string(linkVal->as_string().c_str());
+
+        util::log(util::LogLevel::info, "开始获取备注信息(getNote)");
+
+        // 1) 拉取 add-order 数据（等价 Java: NetworkUtil.getAddOrderData(request)）
+        // 如果你已有 GrabWorkflow::fetchAddOrderData，可复用；这里直接内联 GET。
+        std::vector<util::HttpClient::Header> headers{
+            {"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+            {"Cookie", cookies},
+            {"Referer", "https://weidian.com/"},
+            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76"},
+        };
+
+        // 你项目中应有 httpClient_；若不在控制器，改为对应实例/单例
+        auto t0 = std::chrono::steady_clock::now();
+        auto resp = httpClient_.fetch(
+            "GET",               // method
+            link,                // url
+            headers,             // headers
+            "",                  // body
+            /*affinity*/"",      // 线程亲和（可传 threadId）
+            std::chrono::seconds{ 30 },
+            /*followRedirects*/true,
+            /*maxRedirects*/5,
+            /*uploadCb*/nullptr,
+            /*useProxy*/false,
+            /*overrideProxy*/nullptr
+        );
+        auto t1 = std::chrono::steady_clock::now();
+        util::log(util::LogLevel::info, "getNote: add-order fetch ok, cost=" +
+            std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()) + "ms");
+
+        auto addOrderRoot = quickgrab::util::extractDataObject(resp.body());
+        if (!addOrderRoot || !addOrderRoot->is_object()) {
+            throw std::runtime_error("获取订单信息失败");
         }
 
-        boost::json::object result;
-        result["custom_info"] = std::move(customInfo);
+        // 2) 生成最新 orderParameters（等价 Java: CommonUtil.generateOrderParameters(request, dataObj, true)）
+        // 需要把 link/cookies 映射到你项目里的 Request 模型；这里用最小字段填充。
+        model::Request req{};
+        req.link = link;
+        req.cookies = cookies;
 
-        auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
-        sendJsonResponse(ctx, boost::beast::http::status::ok, response);
-    } catch (const std::exception& ex) {
+        const auto& addOrderObj = addOrderRoot->as_object();
+        const boost::json::object* paramsSrc = &addOrderObj;
+        if (auto* order = addOrderObj.if_contains("order"); order && order->is_object()) {
+            const auto& orderObj = order->as_object();
+            if (auto* res = orderObj.if_contains("result"); res && res->is_object()) {
+                paramsSrc = &res->as_object();
+            }
+        }
+        auto orderParams = quickgrab::util::generateOrderParameters(req, *paramsSrc, /*includeInvalid*/ true);
+        if (!orderParams) {
+            throw std::runtime_error("生成订单参数失败（缺少可用的商品列表）");
+        }
+        req.orderParameters = *orderParams;
+        req.orderParametersRaw = quickgrab::util::stringifyJson(*orderParams);
+
+
+        // 3) 调用 ReConfirmOrder
+        // 构造 POST 到 thor.weidian.com/vbuy/ReConfirmOrder/1.0
+        auto toQuery = [](const std::string& payload) {
+            std::string encoded; encoded.reserve(payload.size() * 2);
+            static constexpr char hex[] = "0123456789ABCDEF";
+            for (unsigned char c : payload) {
+                if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                    encoded.push_back(static_cast<char>(c));
+                }
+                else {
+                    encoded.push_back('%'); encoded.push_back(hex[c >> 4]); encoded.push_back(hex[c & 0x0F]);
+                }
+            }
+            return std::string("param=") + encoded;
+            };
+
+        auto buildPost = [&](const std::string& url, const std::string& body) {
+            boost::beast::http::request<boost::beast::http::string_body> reqPost{ boost::beast::http::verb::post, "/", 11 };
+            // 简化：直接复用你已有的 buildPost；这里保留必要头
+            auto schemePos = url.find("://");
+            auto hostStart = schemePos == std::string::npos ? 0 : schemePos + 3;
+            auto pathPos = url.find('/', hostStart);
+            std::string host = pathPos == std::string::npos ? url.substr(hostStart) : url.substr(hostStart, pathPos - hostStart);
+            std::string target = pathPos == std::string::npos ? "/" : url.substr(pathPos);
+
+            reqPost.target(target);
+            reqPost.set(boost::beast::http::field::host, host);
+            reqPost.set(boost::beast::http::field::content_type, "application/x-www-form-urlencoded;charset=UTF-8");
+            reqPost.set(boost::beast::http::field::user_agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.76");
+            reqPost.set(boost::beast::http::field::referer, "https://weidian.com/");
+            reqPost.set(boost::beast::http::field::cookie, cookies);
+            reqPost.body() = body;
+            reqPost.prepare_payload();
+            return reqPost;
+            };
+
+        const std::string thorUrl = "https://thor.weidian.com/vbuy/ReConfirmOrder/1.0";
+        auto postReq = buildPost(thorUrl, toQuery(req.orderParametersRaw));
+        auto startMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        auto confirm = httpClient_.fetch(postReq, /*affinity*/"", std::chrono::seconds{ 20 }, /*useProxy*/false, /*overrideProxy*/nullptr);
+        auto endMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+        auto confirmJson = quickgrab::util::parseJson(confirm.body());
+        if (!confirmJson.is_object()) {
+            throw std::runtime_error("确认订单响应不是对象");
+        }
+        const auto& confirmObj = confirmJson.as_object();
+        // Java: status.code==0 才取 result
+        int code = -1;
+        if (auto* st = confirmObj.if_contains("status"); st && st->is_object()) {
+            if (auto* cd = st->as_object().if_contains("code"); cd && cd->is_int64()) {
+                code = static_cast<int>(cd->as_int64());
+            }
+        }
+        if (code != 0) {
+            util::log(util::LogLevel::info, "确认订单失败（ReConfirmOrder）");
+            auto response = wrapResponse(makeStatus(400, "获取订单信息失败"), {});
+            sendJsonResponse(ctx, boost::beast::http::status::bad_request, response);
+            return;
+        }
+
+        // Java 会记录时间指标；如需也可取出 result.access_time
+        long serverTime = 0;
+        boost::json::object customInfo;
+        auto* res = confirmObj.if_contains("result");
+        if (res && res->is_object()) {
+            const auto& resObj = res->as_object();
+
+            // 可选：保留 access_time
+            if (auto* access = resObj.if_contains("access_time"); access && access->is_int64()) {
+                serverTime = static_cast<long>(access->as_int64());
+            }
+
+            // ✅ 兼容 array / object
+            boost::json::value customInfoOut = nullptr;
+            if (auto* ci = resObj.if_contains("custom_info")) {
+                if (ci->is_array()) {
+                    customInfoOut = ci->as_array();
+                }
+                else if (ci->is_object()) {
+                    customInfoOut = ci->as_object();
+                }
+            }
+
+            // 包装到响应
+            boost::json::object result;
+            result["custom_info"] = std::move(customInfoOut);
+            auto response = wrapResponse(makeStatus(200, "OK"), std::move(result));
+            sendJsonResponse(ctx, boost::beast::http::status::ok, response);
+            return; // 这里直接返回，避免后面重复发送响应
+        }
+    }
+    catch (const std::exception& ex) {
         auto response = wrapResponse(makeStatus(400, ex.what()), {});
         sendJsonResponse(ctx, boost::beast::http::status::bad_request, response);
     }
 }
+
 
 void ToolController::handleFetchItemInfo(quickgrab::server::RequestContext& ctx) {
     try {

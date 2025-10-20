@@ -89,17 +89,35 @@ void StatisticsController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("GET", "/api/buyers", [this](auto& ctx) { handleBuyers(ctx); });
 }
 
+static std::optional<std::string> normalizeIsoToMysql(std::optional<std::string> iso) {
+    if (!iso || iso->empty()) return std::nullopt;
+    std::string s = *iso;
+
+    // 末尾 Z
+    if (!s.empty() && (s.back() == 'Z' || s.back() == 'z')) s.pop_back();
+
+    // 毫秒
+    auto dot = s.find('.');
+    if (dot != std::string::npos) s.erase(dot);
+
+    // T -> ' '
+    for (auto& c : s) if (c == 'T' || c == 't') c = ' ';
+
+    // 现在是 "YYYY-MM-DD HH:MM:SS"
+    return s;
+}
+
 void StatisticsController::handleStatistics(quickgrab::server::RequestContext& ctx) {
     auto params = parseQueryParameters(ctx.request.target());
     auto buyerId = parseOptionalInt(params, "buyerId");
-    std::optional<std::string> startTime;
-    if (auto it = params.find("startTime"); it != params.end() && !it->second.empty()) {
-        startTime = it->second;
-    }
-    std::optional<std::string> endTime;
-    if (auto it = params.find("endTime"); it != params.end() && !it->second.empty()) {
-        endTime = it->second;
-    }
+
+    std::optional<std::string> startIso, endIso;
+    if (auto it = params.find("startTime"); it != params.end() && !it->second.empty()) startIso = it->second;
+    if (auto it = params.find("endTime");   it != params.end() && !it->second.empty()) endIso = it->second;
+
+    // 规范化为 "YYYY-MM-DD HH:MM:SS"
+    auto startTime = normalizeIsoToMysql(startIso);
+    auto endTime = normalizeIsoToMysql(endIso);
 
     auto stats = statisticsService_.getStatistics(buyerId, startTime, endTime);
     boost::json::object response;
@@ -135,6 +153,7 @@ void StatisticsController::handleStatistics(quickgrab::server::RequestContext& c
         response["exceptionEarnings"] = 0.0;
         response["totalEarnings"] = 0.0;
     }
+    typeStats.emplace_back(response); 
     response["typeStats"] = typeStats;
     sendJson(ctx, response);
 }

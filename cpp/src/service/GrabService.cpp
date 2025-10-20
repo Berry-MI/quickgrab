@@ -267,34 +267,15 @@ void GrabService::processPending() {
                     continue;
                 }
 
-                // 计算还需等待的毫秒数（<0 则为 0）
-                auto waitMs = std::max(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(request.startTime - std::chrono::system_clock::now()),
-                    std::chrono::milliseconds::zero()
-                ).count();
 
-
-                // 用 worker_ 的执行器创建定时器，避免阻塞线程
-                auto timer = std::make_shared<boost::asio::steady_timer>(worker_.get_executor());
-                timer->expires_after(std::chrono::milliseconds(waitMs));
-
-                // 捕获 request 的移动副本到回调里
                 auto scheduled = std::make_shared<model::Request>(std::move(request));
-                timer->async_wait([this, timer, scheduled](const boost::system::error_code& ec) mutable {
-                    if (ec) {
-                        util::log(util::LogLevel::warn,
-                            "启动定时器被取消 id=" + std::to_string(scheduled->id) + " err=" + ec.message());
-                        return;
-                    }
-                    // 直接在 worker 线程继续执行，整个生命周期不占用第二个线程
-                    try {
-                        executeRequest(std::move(*scheduled));
-                    }
-                    catch (const std::exception& ex) {
-                        util::log(util::LogLevel::error,
-                            "处理待抢购请求时异常 id=" + std::to_string(scheduled->id) + " error=" + ex.what());
-                    }
-                    });
+                try {
+                    executeRequest(std::move(*scheduled));
+                }
+                catch (const std::exception& ex) {
+                    util::log(util::LogLevel::error,
+                        "处理待抢购请求时异常 id=" + std::to_string(scheduled->id) + " error=" + ex.what());
+                }
             }
         }
         catch (const std::exception& ex) {

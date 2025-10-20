@@ -999,7 +999,7 @@ void GrabWorkflow::refreshOrderParameters(GrabContext& ctx) {
         }
     }
 
-    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *result, true);
+    auto orderParams = quickgrab::util::generateOrderParameters(ctx.request, *result, true, &httpClient_);
     if (!orderParams) {
         util::log(util::LogLevel::warn,
                   "请求ID=" + std::to_string(ctx.request.id) + " 解析下单数据失败，将尝试使用已有参数");

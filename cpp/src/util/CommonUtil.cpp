@@ -1,15 +1,20 @@
 #include "quickgrab/util/CommonUtil.hpp"
 
+#include "quickgrab/util/HttpClient.hpp"
 #include "quickgrab/util/JsonUtil.hpp"
 #include "quickgrab/util/Logging.hpp"
 
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <boost/beast/http/status.hpp>
+
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <iomanip>
 #include <optional>
+#include <stdexcept>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -218,6 +223,197 @@ const boost::json::array* asArrayPtr(const boost::json::value* value) {
     return nullptr;
 }
 
+std::string decodeHtmlEntities(std::string_view input) {
+    std::string output;
+    output.reserve(input.size());
+
+    for (std::size_t i = 0; i < input.size();) {
+        if (input[i] == '&') {
+            auto semicolon = input.find(';', i + 1);
+            if (semicolon != std::string::npos) {
+                std::string_view entity = input.substr(i + 1, semicolon - i - 1);
+                bool consumed = true;
+                if (entity == "quot") {
+                    output.push_back('"');
+                } else if (entity == "amp") {
+                    output.push_back('&');
+                } else if (entity == "lt") {
+                    output.push_back('<');
+                } else if (entity == "gt") {
+                    output.push_back('>');
+                } else if (entity == "apos") {
+                    output.push_back(static_cast<char>(39));
+                } else if (!entity.empty() && entity.front() == '#') {
+                    int base = 10;
+                    std::string_view digits = entity.substr(1);
+                    if (!digits.empty() && (digits.front() == 'x' || digits.front() == 'X')) {
+                        base = 16;
+                        digits.remove_prefix(1);
+                    }
+                    try {
+                        int codePoint = std::stoi(std::string(digits), nullptr, base);
+                        output.push_back(static_cast<char>(codePoint));
+                    } catch (const std::exception&) {
+                        consumed = false;
+                    }
+                } else {
+                    consumed = false;
+                }
+
+                if (consumed) {
+                    i = semicolon + 1;
+                    continue;
+                }
+            }
+        }
+
+        output.push_back(input[i]);
+        ++i;
+    }
+
+    return output;
+}
+
+std::optional<std::string> extractDataObjAttribute(const std::string& html) {
+    constexpr std::string_view kMarker = "__rocker-render-inject__";
+    auto idPos = html.find(kMarker);
+    if (idPos == std::string::npos) {
+        return std::nullopt;
+    }
+
+    auto dataPos = html.find("data-obj=", idPos);
+    if (dataPos == std::string::npos) {
+        return std::nullopt;
+    }
+    dataPos += std::string_view("data-obj=").size();
+    if (dataPos >= html.size()) {
+        return std::nullopt;
+    }
+
+    char quote = html[dataPos];
+    if (quote != '"' && quote != '\'') {
+        return std::nullopt;
+    }
+    ++dataPos;
+
+    std::string encoded;
+    while (dataPos < html.size() && html[dataPos] != quote) {
+        encoded.push_back(html[dataPos]);
+        ++dataPos;
+    }
+
+    if (dataPos >= html.size()) {
+        return std::nullopt;
+    }
+
+    return decodeHtmlEntities(encoded);
+}
+
+std::optional<boost::json::object> fetchItemModel(HttpClient& httpClient, const std::string& itemId) {
+    std::vector<HttpClient::Header> headers{{"Content-Type", "application/x-www-form-urlencoded;charset=UTF-8"},
+                                            {"Referer", "https://weidian.com/"},
+                                            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}};
+
+    const std::string url = "https://weidian.com/item.html?itemID=" + itemId;
+
+    try {
+        auto response = httpClient.fetch("GET",
+                                         url,
+                                         headers,
+                                         "",
+                                         itemId,
+                                         std::chrono::seconds{15},
+                                         true,
+                                         5,
+                                         nullptr,
+                                         false);
+
+        if (response.result() != boost::beast::http::status::ok) {
+            util::log(util::LogLevel::warn,
+                      "获取商品页面失败 itemId=" + itemId + " 状态码=" + std::to_string(static_cast<int>(response.result())));
+            return std::nullopt;
+        }
+
+        auto payload = extractDataObjAttribute(response.body());
+        if (!payload) {
+            util::log(util::LogLevel::warn, "未找到商品页面的 data-obj 属性 itemId=" + itemId);
+            return std::nullopt;
+        }
+
+        boost::json::value json;
+        try {
+            json = quickgrab::util::parseJson(*payload);
+        } catch (const std::exception& ex) {
+            util::log(util::LogLevel::warn,
+                      "解析商品页面数据失败 itemId=" + itemId + " 错误=" + ex.what());
+            return std::nullopt;
+        }
+
+        if (!json.is_object()) {
+            return std::nullopt;
+        }
+
+        const auto& root = json.as_object();
+        const auto* status = asObjectPtr(root.if_contains("status"));
+        if (!status) {
+            return std::nullopt;
+        }
+
+        auto messageIt = status->if_contains("message");
+        if (!messageIt || !messageIt->is_string()) {
+            return std::nullopt;
+        }
+
+        if (messageIt->as_string() != "OK") {
+            return std::nullopt;
+        }
+
+        const auto* result = asObjectPtr(root.if_contains("result"));
+        if (!result) {
+            return std::nullopt;
+        }
+
+        if (const auto* model = asObjectPtr(result->if_contains("default_model"))) {
+            return *model;
+        }
+    } catch (const std::exception& ex) {
+        util::log(util::LogLevel::warn,
+                  "获取商品页面数据异常 itemId=" + itemId + " 错误=" + ex.what());
+    }
+
+    return std::nullopt;
+}
+
+boost::json::object buildExpireDateInfo(const std::string& expireDate) {
+    std::string cleaned = expireDate;
+    if (auto pos = cleaned.find(" 有效"); pos != std::string::npos) {
+        cleaned.erase(pos, std::string::npos);
+    }
+
+    auto delimiter = cleaned.find(" 至 ");
+    boost::json::object validDateInfo;
+
+    auto trimCopy = [](const std::string& text) {
+        std::string_view view{text};
+        view = trimView(view);
+        return std::string(view);
+    };
+
+    if (delimiter != std::string::npos) {
+        std::string start = cleaned.substr(0, delimiter);
+        std::string end = cleaned.substr(delimiter + std::string(" 至 ").size());
+        validDateInfo["validStartDate"] = trimCopy(start);
+        validDateInfo["validEndDate"] = trimCopy(end);
+        validDateInfo["validType"] = 4;
+    } else {
+        validDateInfo["validType"] = 1;
+    }
+
+    boost::json::object conveyInfo;
+    conveyInfo["valid_date_info"] = std::move(validDateInfo);
+    return conveyInfo;
+}
+
 std::optional<std::string> findValueByKey(const boost::json::value& value, std::string_view key) {
     if (value.is_object()) {
         const auto& obj = value.as_object();
@@ -344,7 +540,8 @@ double readObjectDouble(const boost::json::object& obj, const char* key, double 
 
 std::optional<boost::json::object> generateOrderParameters(const model::Request& request,
                                                            const boost::json::object& dataObj,
-                                                           bool includeInvalid) {
+                                                           bool includeInvalid,
+                                                           HttpClient* httpClient) {
     boost::json::object params;
 
     std::vector<std::string_view> shopListNames = {"shop_list"};
@@ -359,6 +556,29 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
 
     auto calendarDates = buildCalendarMap(dataObj);
     auto extension = parseObjectValue(request.extension);
+    bool extensionHasExpireDate = false;
+    if (auto it = extension.if_contains("hasExpireDate")) {
+        extensionHasExpireDate = parseFlag(*it);
+    }
+    std::unordered_map<std::string, boost::json::object> itemModelCache;
+
+    auto getItemModel = [&](const std::string& itemId) -> boost::json::object* {
+        if (!httpClient || itemId.empty()) {
+            return nullptr;
+        }
+
+        if (auto cached = itemModelCache.find(itemId); cached != itemModelCache.end()) {
+            return cached->second.empty() ? nullptr : &cached->second;
+        }
+
+        if (auto model = fetchItemModel(*httpClient, itemId)) {
+            auto [iter, _] = itemModelCache.emplace(itemId, std::move(*model));
+            return &iter->second;
+        }
+
+        itemModelCache.emplace(itemId, boost::json::object{});
+        return nullptr;
+    };
 
     bool manualShipping = false;
     double manualShippingFee = 0.0;
@@ -396,6 +616,7 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                 boost::json::array itemArray;
                 double shopOriPrice = 0.0;
                 double shopPrice = 0.0;
+                std::string firstItemId;
 
                 for (const auto& itemValue : *items) {
                     if (!itemValue.is_object()) {
@@ -405,6 +626,10 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                     auto itemId = readObjectString(itemObj, "item_id");
                     if (itemId.empty()) {
                         continue;
+                    }
+
+                    if (firstItemId.empty()) {
+                        firstItemId = itemId;
                     }
 
                     int quantity = readObjectInt(itemObj, "quantity", 1);
@@ -424,9 +649,30 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                         itemNode["calendar_date"] = it->second;
                     }
 
-                    if (auto convey = itemObj.if_contains("item_convey_info");
-                        convey && convey->is_object() && !convey->as_object().empty()) {
-                        itemNode["item_convey_info"] = convey->as_object();
+                    bool hasConveyInfo = false;
+                    if (auto convey = itemObj.if_contains("item_convey_info"); convey && convey->is_object()) {
+                        const auto& conveyObj = convey->as_object();
+                        if (auto valid = conveyObj.if_contains("valid_date_info"); valid && valid->is_object() &&
+                            !valid->as_object().empty()) {
+                            itemNode["item_convey_info"] = conveyObj;
+                            hasConveyInfo = true;
+                        }
+                    }
+
+                    if (!hasConveyInfo && extensionHasExpireDate) {
+                        if (auto* model = getItemModel(itemId)) {
+                            if (const auto* itemInfo = asObjectPtr(model->if_contains("itemInfo"))) {
+                                if (const auto* ticketInfo = asObjectPtr(itemInfo->if_contains("ticketItemInfo"))) {
+                                    if (auto expire = ticketInfo->if_contains("expireDate"); expire && expire->is_string()) {
+                                        std::string expireText(expire->as_string().c_str());
+                                        if (!expireText.empty()) {
+                                            itemNode["item_convey_info"] = buildExpireDateInfo(expireText);
+                                            hasConveyInfo = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     itemArray.emplace_back(std::move(itemNode));
@@ -445,6 +691,14 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                 if (!deliveryInfo) {
                     if (auto info = dataObj.if_contains("delivery_info")) {
                         deliveryInfo = asObjectPtr(info);
+                    }
+                }
+
+                if (!deliveryInfo && !firstItemId.empty()) {
+                    if (auto* model = getItemModel(firstItemId)) {
+                        if (auto info = model->if_contains("delivery_info")) {
+                            deliveryInfo = asObjectPtr(info);
+                        }
                     }
                 }
 

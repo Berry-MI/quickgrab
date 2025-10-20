@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -456,6 +457,82 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
         }
     }
 
+    auto resolveBuyerAddress = [&](const boost::json::object& root) -> const boost::json::object* {
+        if (const auto* direct = asObjectPtr(root.if_contains("buyer_address"))) {
+            return direct;
+        }
+        if (const auto* confirm = asObjectPtr(root.if_contains("confirmOrderParam"))) {
+            if (const auto* nested = asObjectPtr(confirm->if_contains("buyer_address"))) {
+                return nested;
+            }
+        }
+        if (const auto* result = asObjectPtr(root.if_contains("result"))) {
+            if (const auto* nested = asObjectPtr(result->if_contains("buyer_address"))) {
+                return nested;
+            }
+        }
+        return nullptr;
+    };
+
+    auto copyBuyerContact = [&](const boost::json::object& address) {
+        auto assignIfNotEmpty = [&](const char* sourceKey, const char* targetKey) {
+            auto value = readObjectString(address, sourceKey);
+            if (!value.empty()) {
+                buyerInfo[targetKey] = std::move(value);
+            }
+        };
+
+        auto assignNumeric = [&](const char* sourceKey, const char* targetKey) {
+            if (auto it = address.if_contains(sourceKey)) {
+                if (it->is_int64()) {
+                    buyerInfo[targetKey] = it->as_int64();
+                } else if (it->is_uint64()) {
+                    buyerInfo[targetKey] = it->as_uint64();
+                } else if (it->is_double()) {
+                    buyerInfo[targetKey] = it->as_double();
+                } else if (it->is_string()) {
+                    auto text = std::string(it->as_string().c_str());
+                    if (!text.empty()) {
+                        buyerInfo[targetKey] = text;
+                    }
+                }
+            }
+        };
+
+        assignNumeric("address_id", "buyer_address_id");
+        assignNumeric("addr_id", "buyer_address_id");
+        assignNumeric("id", "buyer_address_id");
+
+        assignIfNotEmpty("buyer_name", "buyer_name");
+        assignIfNotEmpty("name", "buyer_name");
+
+        assignIfNotEmpty("phone", "buyer_telephone");
+        assignIfNotEmpty("telephone", "buyer_telephone");
+
+        assignIfNotEmpty("province", "province");
+        assignIfNotEmpty("city", "city");
+        assignIfNotEmpty("district", "district");
+        assignIfNotEmpty("county", "district");
+        assignIfNotEmpty("town", "town");
+        assignIfNotEmpty("address", "address");
+        assignIfNotEmpty("address_detail", "address_detail");
+        assignIfNotEmpty("detail", "address_detail");
+
+        if (const auto* region = asObjectPtr(address.if_contains("region"))) {
+            auto assignRegion = [&](const char* sourceKey, const char* targetKey) {
+                auto value = readObjectString(*region, sourceKey);
+                if (!value.empty()) {
+                    buyerInfo[targetKey] = std::move(value);
+                }
+            };
+
+            assignRegion("province", "province");
+            assignRegion("city", "city");
+            assignRegion("district", "district");
+            assignRegion("county", "district");
+        }
+    };
+
     if (auto agreementList = asArrayPtr(dataObj.if_contains("agreement_info_list")); agreementList && !agreementList->empty()) {
         boost::json::array agreementTypes;
         for (const auto& agreement : *agreementList) {
@@ -484,6 +561,12 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
     }
 
     int deliverTypeValue = 0;
+    int isNoShipAddr = 0;
+    if (auto noShip = findValueByKey(dataObj, "is_no_ship_addr")) {
+        isNoShipAddr = (*noShip == "1") ? 1 : 0;
+    }
+    bool requiresShippingAddress = (isNoShipAddr == 0);
+
     if (deliverTypeText == "1") {
         deliverTypeValue = 1;
         if (const auto* buyerAddress = asObjectPtr(dataObj.if_contains("buyer_address"))) {
@@ -527,10 +610,15 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
 
     params["deliver_type"] = deliverTypeValue;
 
-    if (auto noShip = findValueByKey(dataObj, "is_no_ship_addr")) {
-        params["is_no_ship_addr"] = (*noShip == "1") ? 1 : 0;
-    } else {
-        params["is_no_ship_addr"] = 0;
+    params["is_no_ship_addr"] = isNoShipAddr;
+
+    if (requiresShippingAddress && deliverTypeValue == 0) {
+        if (const auto* buyerAddress = resolveBuyerAddress(dataObj)) {
+            copyBuyerContact(*buyerAddress);
+        } else {
+            util::log(util::LogLevel::warn,
+                      "ID=" + std::to_string(request.id) + " 缺少快递收货地址信息，模板要求提供收货地址");
+        }
     }
 
     params["total_pay_price"] = formatPrice(totalPayPrice);

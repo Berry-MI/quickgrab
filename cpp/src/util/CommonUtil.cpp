@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <iomanip>
 #include <optional>
 #include <regex>
@@ -19,6 +20,111 @@
 
 namespace quickgrab::util {
 namespace {
+
+std::string_view trimView(std::string_view view) {
+    while (!view.empty() && std::isspace(static_cast<unsigned char>(view.front()))) {
+        view.remove_prefix(1);
+    }
+    while (!view.empty() && std::isspace(static_cast<unsigned char>(view.back()))) {
+        view.remove_suffix(1);
+    }
+    return view;
+}
+
+std::optional<int> parseIntLike(std::string_view text) {
+    text = trimView(text);
+    if (text.empty()) {
+        return std::nullopt;
+    }
+
+    std::string normalized(text);
+    std::string lowered = normalized;
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    if (lowered == "true" || lowered == "yes") {
+        return 1;
+    }
+    if (lowered == "false" || lowered == "no") {
+        return 0;
+    }
+
+    try {
+        size_t consumed = 0;
+        int value = std::stoi(normalized, &consumed, 10);
+        if (consumed == normalized.size()) {
+            return value;
+        }
+    } catch (const std::exception&) {
+    }
+
+    try {
+        size_t consumed = 0;
+        double value = std::stod(normalized, &consumed);
+        if (consumed == normalized.size()) {
+            return static_cast<int>(std::lround(value));
+        }
+    } catch (const std::exception&) {
+    }
+
+    return std::nullopt;
+}
+
+std::optional<int> parseIntLike(const boost::json::value& value) {
+    if (value.is_int64()) {
+        return static_cast<int>(value.as_int64());
+    }
+    if (value.is_uint64()) {
+        return static_cast<int>(value.as_uint64());
+    }
+    if (value.is_double()) {
+        return static_cast<int>(std::lround(value.as_double()));
+    }
+    if (value.is_bool()) {
+        return value.as_bool() ? 1 : 0;
+    }
+    if (value.is_string()) {
+        const auto& str = value.as_string();
+        return parseIntLike(std::string_view{str.c_str(), str.size()});
+    }
+    return std::nullopt;
+}
+
+bool parseFlag(const boost::json::value& value, bool fallback = false) {
+    if (auto parsed = parseIntLike(value)) {
+        return *parsed != 0;
+    }
+    return fallback;
+}
+
+bool parseFlag(std::string_view text, bool fallback = false) {
+    if (auto parsed = parseIntLike(text)) {
+        return *parsed != 0;
+    }
+    return fallback;
+}
+
+const boost::json::value* findValueNodeByKey(const boost::json::value& value, std::string_view key) {
+    if (value.is_object()) {
+        const auto& obj = value.as_object();
+        if (auto it = obj.if_contains(key.data())) {
+            return it;
+        }
+        for (const auto& entry : obj) {
+            if (auto found = findValueNodeByKey(entry.value(), key)) {
+                return found;
+            }
+        }
+    } else if (value.is_array()) {
+        for (const auto& element : value.as_array()) {
+            if (auto found = findValueNodeByKey(element, key)) {
+                return found;
+            }
+        }
+    }
+    return nullptr;
+}
 
 std::string toString(const boost::json::value& value) {
     if (value.is_string()) {
@@ -457,8 +563,8 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
     }
 
     boost::json::object buyerInfo;
-    if (auto idCardFlag = findValueByKey(dataObj, "id_card_flag")) {
-        if (*idCardFlag == "1" && !request.idNumber.empty()) {
+    if (const auto* idCardNode = findValueNodeByKey(dataObj, "id_card_flag")) {
+        if (parseFlag(*idCardNode) && !request.idNumber.empty()) {
             buyerInfo["buyer_id_no_code"] = request.idNumber;
         }
     }
@@ -572,19 +678,23 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
         }
     }
 
-    std::string deliverTypeText;
+    std::optional<int> deliverTypeHint;
     if (auto it = dataObj.if_contains("only_self_delivery")) {
-        deliverTypeText = toString(*it);
+        deliverTypeHint = parseIntLike(*it);
     }
 
     int deliverTypeValue = 0;
     int isNoShipAddr = 0;
-    if (auto noShip = findValueByKey(dataObj, "is_no_ship_addr")) {
-        isNoShipAddr = (*noShip == "1") ? 1 : 0;
+    if (const auto* noShipNode = findValueNodeByKey(dataObj, "is_no_ship_addr")) {
+        isNoShipAddr = parseFlag(*noShipNode) ? 1 : 0;
+    } else if (auto noShip = findValueByKey(dataObj, "is_no_ship_addr")) {
+        if (parseFlag(*noShip)) {
+            isNoShipAddr = 1;
+        }
     }
     bool requiresShippingAddress = (isNoShipAddr == 0);
 
-    if (deliverTypeText == "1") {
+    if (deliverTypeHint && *deliverTypeHint == 1) {
         deliverTypeValue = 1;
         if (const auto* buyerAddress = asObjectPtr(dataObj.if_contains("buyer_address"))) {
             if (const auto* selfAddresses = asArrayPtr(buyerAddress->if_contains("self_delivery_address"));
@@ -603,7 +713,7 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                 buyerInfo["buyer_telephone"] = phone;
             }
         }
-    } else if (deliverTypeText == "0") {
+    } else if (deliverTypeHint && *deliverTypeHint == 0) {
         if (const auto* expressTypes = asObjectPtr(dataObj.if_contains("express_types"))) {
             if (const auto* typeList = asArrayPtr(expressTypes->if_contains("type_list")); typeList) {
                 for (const auto& typeValue : *typeList) {
@@ -621,7 +731,7 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
         deliverTypeValue = 1;
     }
 
-    if (deliverTypeText.empty() && deliveryInfoType == 3) {
+    if (!deliverTypeHint && deliveryInfoType == 3) {
         deliverTypeValue = 1;
     }
 

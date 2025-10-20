@@ -172,6 +172,20 @@ boost::json::object ensureJsonObject(const boost::json::value& value) {
     return {};
 }
 
+boost::json::value parseJsonValue(const boost::json::value& value) {
+    if (value.is_object() || value.is_array() || value.is_null()) {
+        return value;
+    }
+    if (value.is_string()) {
+        try {
+            auto parsed = boost::json::parse(std::string(value.as_string().c_str()));
+            return parsed;
+        } catch (const std::exception&) {
+        }
+    }
+    return boost::json::object{};
+}
+
 boost::json::object makeStatus(int code, std::string message, std::string description = {}) {
     boost::json::object status;
     status["code"] = code;
@@ -281,7 +295,7 @@ std::chrono::system_clock::time_point parseDateTime(const boost::json::object& o
 }
 
 boost::json::object sanitizeRequestPayload(boost::json::object payload) {
-    auto normalize = [&](const char* key) {
+    auto normalizeObject = [&](const char* key) {
         if (auto it = payload.if_contains(key); it) {
             auto parsed = ensureJsonObject(*it);
             if (!parsed.empty() || it->is_object()) {
@@ -290,10 +304,16 @@ boost::json::object sanitizeRequestPayload(boost::json::object payload) {
         }
     };
 
-    normalize("userInfo");
-    normalize("orderTemplate");
-    normalize("orderParameters");
-    normalize("extension");
+    auto normalizeJsonValue = [&](const char* key) {
+        if (auto it = payload.if_contains(key); it) {
+            payload[key] = parseJsonValue(*it);
+        }
+    };
+
+    normalizeObject("userInfo");
+    normalizeObject("orderParameters");
+    normalizeObject("extension");
+    normalizeJsonValue("orderTemplate");
 
     if (!payload.if_contains("userInfo") || !payload.at("userInfo").is_object()) {
         boost::json::object userInfo{{"nickName", "未知"}, {"telephone", "未知"}};

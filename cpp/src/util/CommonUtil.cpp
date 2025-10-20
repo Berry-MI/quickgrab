@@ -94,6 +94,10 @@ std::string formatPrice(double value) {
     return oss.str();
 }
 
+double normalizeUnitPrice(double value) {
+    return std::round(value * 100.0) / 100.0;
+}
+
 const boost::json::object* asObjectPtr(const boost::json::value* value) {
     if (value && value->is_object()) {
         return &value->as_object();
@@ -298,8 +302,10 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                     }
 
                     int quantity = readObjectInt(itemObj, "quantity", 1);
-                    double price = readObjectDouble(itemObj, "price");
-                    double oriPrice = itemObj.if_contains("ori_price") ? readObjectDouble(itemObj, "ori_price", price) : price;
+                    double price = normalizeUnitPrice(readObjectDouble(itemObj, "price"));
+                    double oriPrice = normalizeUnitPrice(itemObj.if_contains("ori_price")
+                                                            ? readObjectDouble(itemObj, "ori_price", price)
+                                                            : price);
 
                     boost::json::object itemNode;
                     itemNode["item_id"] = itemId;
@@ -546,7 +552,18 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                 } else if (typeNode->is_double()) {
                     agreementTypes.emplace_back(typeNode->as_double());
                 } else if (typeNode->is_string()) {
-                    agreementTypes.emplace_back(std::string(typeNode->as_string().c_str()));
+                    auto text = std::string(typeNode->as_string().c_str());
+                    if (!text.empty()) {
+                        try {
+                            if (text.find('.') != std::string::npos) {
+                                agreementTypes.emplace_back(std::stod(text));
+                            } else {
+                                agreementTypes.emplace_back(std::stoll(text));
+                            }
+                        } catch (const std::exception&) {
+                            agreementTypes.emplace_back(std::move(text));
+                        }
+                    }
                 }
             }
         }

@@ -311,8 +311,9 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
                         itemNode["calendar_date"] = it->second;
                     }
 
-                    if (auto convey = itemObj.if_contains("item_convey_info")) {
-                        itemNode["item_convey_info"] = *convey;
+                    if (auto convey = itemObj.if_contains("item_convey_info");
+                        convey && convey->is_object() && !convey->as_object().empty()) {
+                        itemNode["item_convey_info"] = convey->as_object();
                     }
 
                     itemArray.emplace_back(std::move(itemNode));
@@ -421,10 +422,30 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
 
     params["shop_list"] = shopListArray;
 
+    auto assignCustomInfo = [&params](const boost::json::value& value) {
+        if (value.is_object()) {
+            const auto& obj = value.as_object();
+            if (!obj.empty()) {
+                params["custom_info"] = obj;
+            }
+        } else if (value.is_array()) {
+            const auto& array = value.as_array();
+            if (!array.empty()) {
+                params["custom_info"] = array;
+            }
+        }
+    };
+
     if (!request.orderTemplate.is_null()) {
-        auto customInfo = parseObjectValue(request.orderTemplate);
-        if (!customInfo.empty()) {
-            params["custom_info"] = std::move(customInfo);
+        assignCustomInfo(request.orderTemplate);
+        if (!params.if_contains("custom_info")) {
+            if (request.orderTemplate.is_string()) {
+                try {
+                    auto parsed = quickgrab::util::parseJson(std::string(request.orderTemplate.as_string().c_str()));
+                    assignCustomInfo(parsed);
+                } catch (const std::exception&) {
+                }
+            }
         }
     }
 
@@ -441,9 +462,15 @@ std::optional<boost::json::object> generateOrderParameters(const model::Request&
             if (!agreement.is_object()) {
                 continue;
             }
-            auto agreementType = readObjectString(agreement.as_object(), "agreement_type");
-            if (!agreementType.empty()) {
-                agreementTypes.emplace_back(agreementType);
+            const auto& agreementObj = agreement.as_object();
+            if (auto typeNode = agreementObj.if_contains("agreement_type")) {
+                if (typeNode->is_int64()) {
+                    agreementTypes.emplace_back(typeNode->as_int64());
+                } else if (typeNode->is_double()) {
+                    agreementTypes.emplace_back(typeNode->as_double());
+                } else if (typeNode->is_string()) {
+                    agreementTypes.emplace_back(std::string(typeNode->as_string().c_str()));
+                }
             }
         }
         if (!agreementTypes.empty()) {

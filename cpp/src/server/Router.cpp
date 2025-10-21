@@ -12,11 +12,15 @@ std::string normalizeMethod(std::string method) {
 }
 }
 
-void Router::addRoute(std::string method, std::string path, Handler handler) {
+void Router::addRoute(std::string method,
+                      std::string path,
+                      Handler handler,
+                      RouteOptions options) {
     RouteEntry entry;
     entry.method = normalizeMethod(std::move(method));
     entry.path = std::move(path);
     entry.handler = std::move(handler);
+    entry.options = std::move(options);
 
     std::string token;
     std::ostringstream regexBuilder;
@@ -46,9 +50,9 @@ void Router::addRoute(std::string method, std::string path, Handler handler) {
     routes_.push_back(std::move(entry));
 }
 
-Router::Handler Router::resolve(const std::string& method,
-                                const std::string& path,
-                                std::unordered_map<std::string, std::string>& params) const {
+std::optional<Router::RouteMatch> Router::resolve(const std::string& method,
+                                                  const std::string& path,
+                                                  std::unordered_map<std::string, std::string>& params) const {
     auto normalized = normalizeMethod(method);
     const std::string* pathToMatch = &path;
     std::string strippedPath;
@@ -72,11 +76,11 @@ Router::Handler Router::resolve(const std::string& method,
                     params.emplace(entry.tokens[i], match[i + 1].str());
                 }
             }
-            return entry.handler;
+            return RouteMatch{entry.handler, entry.options.requireAuth, entry.options.redirectToLogin};
         }
     }
 
-    return nullptr;
+    return std::nullopt;
 }
 
 } // namespace quickgrab::server

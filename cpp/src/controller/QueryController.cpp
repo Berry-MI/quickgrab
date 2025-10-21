@@ -207,15 +207,19 @@ QueryController::QueryController(service::QueryService& queryService)
     : queryService_(queryService) {}
 
 void QueryController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("GET", "/api/grab/pending", [this](auto& ctx) { handlePending(ctx); });
+    router.addRoute(
+        "GET",
+        "/api/grab/pending",
+        [this](auto& ctx) { handlePending(ctx); },
+        { .requireAuth = true });
 
     auto bindGetRequests = [this](auto& ctx) { handleGetRequests(ctx); };
-    router.addRoute("GET", "/getRequests", bindGetRequests);
-    router.addRoute("GET", "/api/getRequests", bindGetRequests);
+    router.addRoute("GET", "/getRequests", bindGetRequests, { .requireAuth = true });
+    router.addRoute("GET", "/api/getRequests", bindGetRequests, { .requireAuth = true });
 
     auto bindGetResults = [this](auto& ctx) { handleGetResults(ctx); };
-    router.addRoute("GET", "/getResults", bindGetResults);
-    router.addRoute("GET", "/api/getResults", bindGetResults);
+    router.addRoute("GET", "/getResults", bindGetResults, { .requireAuth = true });
+    router.addRoute("GET", "/api/getResults", bindGetResults, { .requireAuth = true });
     auto bindDeleteRequest = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
         if (it == ctx.pathParameters.end()) {
@@ -228,8 +232,8 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
             sendNotFound(ctx);
         }
     };
-    router.addRoute("DELETE", "/deleteRequest/:id", bindDeleteRequest);
-    router.addRoute("DELETE", "/api/deleteRequest/:id", bindDeleteRequest);
+    router.addRoute("DELETE", "/deleteRequest/:id", bindDeleteRequest, { .requireAuth = true });
+    router.addRoute("DELETE", "/api/deleteRequest/:id", bindDeleteRequest, { .requireAuth = true });
 
     auto bindDeleteResult = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
@@ -243,8 +247,8 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
             sendNotFound(ctx);
         }
     };
-    router.addRoute("DELETE", "/deleteResult/:id", bindDeleteResult);
-    router.addRoute("DELETE", "/api/deleteResult/:id", bindDeleteResult);
+    router.addRoute("DELETE", "/deleteResult/:id", bindDeleteResult, { .requireAuth = true });
+    router.addRoute("DELETE", "/api/deleteResult/:id", bindDeleteResult, { .requireAuth = true });
 
     auto bindGetResult = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
@@ -258,12 +262,12 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
             sendNotFound(ctx);
         }
     };
-    router.addRoute("GET", "/getResult/:id", bindGetResult);
-    router.addRoute("GET", "/api/getResult/:id", bindGetResult);
+    router.addRoute("GET", "/getResult/:id", bindGetResult, { .requireAuth = true });
+    router.addRoute("GET", "/api/getResult/:id", bindGetResult, { .requireAuth = true });
 
     auto bindGetBuyers = [this](auto& ctx) { handleGetBuyers(ctx); };
-    router.addRoute("GET", "/getBuyer", bindGetBuyers);
-    router.addRoute("GET", "/api/getBuyer", bindGetBuyers);
+    router.addRoute("GET", "/getBuyer", bindGetBuyers, { .requireAuth = true });
+    router.addRoute("GET", "/api/getBuyer", bindGetBuyers, { .requireAuth = true });
 }
 
 void QueryController::handlePending(quickgrab::server::RequestContext& ctx) {

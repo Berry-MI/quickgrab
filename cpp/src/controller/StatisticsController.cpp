@@ -83,10 +83,26 @@ StatisticsController::StatisticsController(service::StatisticsService& statistic
     : statisticsService_(statisticsService) {}
 
 void StatisticsController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("GET", "/api/statistics", [this](auto& ctx) { handleStatistics(ctx); });
-    router.addRoute("GET", "/api/dailyStats", [this](auto& ctx) { handleDailyStats(ctx); });
-    router.addRoute("GET", "/api/hourlyStats", [this](auto& ctx) { handleHourlyStats(ctx); });
-    router.addRoute("GET", "/api/buyers", [this](auto& ctx) { handleBuyers(ctx); });
+    router.addRoute(
+        "GET",
+        "/api/statistics",
+        [this](auto& ctx) { handleStatistics(ctx); },
+        { .requireAuth = true });
+    router.addRoute(
+        "GET",
+        "/api/dailyStats",
+        [this](auto& ctx) { handleDailyStats(ctx); },
+        { .requireAuth = true });
+    router.addRoute(
+        "GET",
+        "/api/hourlyStats",
+        [this](auto& ctx) { handleHourlyStats(ctx); },
+        { .requireAuth = true });
+    router.addRoute(
+        "GET",
+        "/api/buyers",
+        [this](auto& ctx) { handleBuyers(ctx); },
+        { .requireAuth = true });
 }
 
 void StatisticsController::handleStatistics(quickgrab::server::RequestContext& ctx) {

@@ -669,20 +669,20 @@ ToolController::ToolController(util::HttpClient& httpClient)
 
 void ToolController::registerRoutes(server::Router& router) {
     auto bindGetNote = [this](auto& ctx) { handleGetNote(ctx); };
-    router.addRoute("POST", "/getNote", bindGetNote);
-    router.addRoute("POST", "/api/getNote", bindGetNote);
+    router.addRoute("POST", "/getNote", bindGetNote, { .requireAuth = true });
+    router.addRoute("POST", "/api/getNote", bindGetNote, { .requireAuth = true });
 
     auto bindFetchItemInfo = [this](auto& ctx) { handleFetchItemInfo(ctx); };
-    router.addRoute("POST", "/fetchItemInfo", bindFetchItemInfo);
-    router.addRoute("POST", "/api/fetchItemInfo", bindFetchItemInfo);
+    router.addRoute("POST", "/fetchItemInfo", bindFetchItemInfo, { .requireAuth = true });
+    router.addRoute("POST", "/api/fetchItemInfo", bindFetchItemInfo, { .requireAuth = true });
 
     auto bindCheckCookies = [this](auto& ctx) { handleCheckCookies(ctx); };
-    router.addRoute("GET", "/checkCookiesValidity", bindCheckCookies);
-    router.addRoute("GET", "/api/checkCookiesValidity", bindCheckCookies);
+    router.addRoute("GET", "/checkCookiesValidity", bindCheckCookies, { .requireAuth = true });
+    router.addRoute("GET", "/api/checkCookiesValidity", bindCheckCookies, { .requireAuth = true });
 
     auto bindCheckLatency = [this](auto& ctx) { handleCheckLatency(ctx); };
-    router.addRoute("POST", "/checkLatency", bindCheckLatency);
-    router.addRoute("POST", "/api/checkLatency", bindCheckLatency);
+    router.addRoute("POST", "/checkLatency", bindCheckLatency, { .requireAuth = true });
+    router.addRoute("POST", "/api/checkLatency", bindCheckLatency, { .requireAuth = true });
 }
 
 void ToolController::handleGetNote(server::RequestContext& ctx) {

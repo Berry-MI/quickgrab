@@ -470,7 +470,11 @@ SubmitController::SubmitController(service::GrabService& grabService,
     , httpClient_(httpClient) {}
 
 void SubmitController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("POST", "/api/submitRequest", [this](auto& ctx) { handleSubmitRequest(ctx); });
+    router.addRoute(
+        "POST",
+        "/api/submitRequest",
+        [this](auto& ctx) { handleSubmitRequest(ctx); },
+        { .requireAuth = true });
 }
 
 void SubmitController::handleSubmitRequest(quickgrab::server::RequestContext& ctx) {

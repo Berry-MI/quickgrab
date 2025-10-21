@@ -244,7 +244,7 @@ int main(int /*argc*/, char** /*argv*/) {
     controller::UserController userController{authService};
     userController.registerRoutes(*router);
 
-    auto server = std::make_shared<server::HttpServer>(io, router, "0.0.0.0", 8080);
+    auto server = std::make_shared<server::HttpServer>(io, router, authService, "0.0.0.0", 8080);
     server->start();
 
     startRequestPump(io, grabService);

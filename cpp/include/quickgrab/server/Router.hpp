@@ -3,6 +3,7 @@
 #include "quickgrab/server/RequestContext.hpp"
 
 #include <functional>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>
@@ -14,10 +15,24 @@ class Router {
 public:
     using Handler = std::function<void(RequestContext&)>;
 
-    void addRoute(std::string method, std::string path, Handler handler);
-    Handler resolve(const std::string& method,
-                    const std::string& path,
-                    std::unordered_map<std::string, std::string>& params) const;
+    struct RouteOptions {
+        bool requireAuth{false};
+        bool redirectToLogin{false};
+    };
+
+    struct RouteMatch {
+        Handler handler;
+        bool requireAuth{false};
+        bool redirectToLogin{false};
+    };
+
+    void addRoute(std::string method,
+                  std::string path,
+                  Handler handler,
+                  RouteOptions options = {});
+    std::optional<RouteMatch> resolve(const std::string& method,
+                                      const std::string& path,
+                                      std::unordered_map<std::string, std::string>& params) const;
 
 private:
     struct RouteEntry {
@@ -26,6 +41,7 @@ private:
         std::regex pattern;
         std::vector<std::string> tokens;
         Handler handler;
+        RouteOptions options;
     };
 
     std::vector<RouteEntry> routes_;

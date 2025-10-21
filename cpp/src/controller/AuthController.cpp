@@ -4,11 +4,13 @@
 #include <boost/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace quickgrab::controller {
@@ -82,6 +84,82 @@ std::unordered_map<std::string, std::string> parseCookies(const std::string& hea
         start = end + 1;
     }
     return cookies;
+}
+
+bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        unsigned char left = static_cast<unsigned char>(lhs[i]);
+        unsigned char right = static_cast<unsigned char>(rhs[i]);
+        if (std::tolower(left) != std::tolower(right)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isPublicResourcePath(std::string_view path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    if (path == "/login" || path == "/login/" || path == "/login.html") {
+        return true;
+    }
+
+    if (path == "/favicon.ico" || path == "/robots.txt") {
+        return true;
+    }
+
+    auto filenamePos = path.find_last_of('/');
+    std::string_view filename = filenamePos == std::string_view::npos ? path : path.substr(filenamePos + 1);
+    if (filename.empty()) {
+        return false;
+    }
+
+    auto dotPos = filename.find_last_of('.');
+    if (dotPos == std::string_view::npos) {
+        return false;
+    }
+
+    std::string_view ext = filename.substr(dotPos + 1);
+    static constexpr std::array<std::string_view, 16> kAllowedExtensions{
+        "css", "js",  "png",  "jpg",  "jpeg", "gif",  "svg",  "webp",
+        "bmp", "ico", "woff", "woff2", "ttf",  "otf", "eot",  "map",
+    };
+
+    for (auto allowed : kAllowedExtensions) {
+        if (equalsIgnoreCase(ext, allowed)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool shouldBypassProbe(const quickgrab::server::RequestContext& ctx) {
+    auto headerIt = ctx.request.base().find("X-Original-URI");
+    if (headerIt == ctx.request.base().end()) {
+        return false;
+    }
+
+    std::string_view originalUri(headerIt->value().data(), headerIt->value().size());
+    if (originalUri.empty()) {
+        return false;
+    }
+
+    auto queryPos = originalUri.find('?');
+    if (queryPos != std::string_view::npos) {
+        originalUri = originalUri.substr(0, queryPos);
+    }
+
+    if (originalUri.empty()) {
+        return false;
+    }
+
+    return isPublicResourcePath(originalUri);
 }
 
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,
@@ -175,6 +253,12 @@ void AuthController::handleSessionStatus(quickgrab::server::RequestContext& ctx,
 
     auto session = authService_.touchSession(token);
     if (!session) {
+        if (mode == SessionResponseMode::probe && shouldBypassProbe(ctx)) {
+            ctx.response.result(boost::beast::http::status::no_content);
+            ctx.response.prepare_payload();
+            return;
+        }
+
         ctx.response.set(boost::beast::http::field::set_cookie, buildExpiredCookie());
         if (mode == SessionResponseMode::full) {
             boost::json::object payload{{"status", "error"}, {"message", "未登录"}};

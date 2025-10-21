@@ -8,6 +8,7 @@
 #include <cctype>
 #include <chrono>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -56,6 +57,61 @@ std::unordered_map<std::string, std::string> parseFormUrlEncoded(const std::stri
         start = end + 1;
     }
     return params;
+}
+
+std::optional<std::string> findQueryParameter(boost::beast::string_view query, std::string_view key) {
+    while (!query.empty()) {
+        auto ampPos = query.find('&');
+        auto token = ampPos == boost::beast::string_view::npos ? query : query.substr(0, ampPos);
+        if (ampPos == boost::beast::string_view::npos) {
+            query = {};
+        } else {
+            query.remove_prefix(ampPos + 1);
+        }
+
+        auto eqPos = token.find('=');
+        if (eqPos == boost::beast::string_view::npos) {
+            continue;
+        }
+
+        auto name = token.substr(0, eqPos);
+        if (name.size() == key.size() &&
+            std::equal(name.begin(), name.end(), key.begin(), key.end())) {
+            auto value = token.substr(eqPos + 1);
+            return urlDecode(std::string(value));
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> extractOriginalUri(const quickgrab::server::RequestContext& ctx) {
+    static constexpr std::array<std::string_view, 5> kHeaderKeys{
+        "X-Original-URI", "X-Original-URL", "X-Forwarded-Uri", "X-Forwarded-URL", "X-Rewrite-URL",
+    };
+
+    for (auto header : kHeaderKeys) {
+        auto it = ctx.request.base().find(header);
+        if (it != ctx.request.base().end() && !it->value().empty()) {
+            return std::string(it->value());
+        }
+    }
+
+    auto target = ctx.request.target();
+    auto queryPos = target.find('?');
+    if (queryPos == boost::beast::string_view::npos) {
+        return std::nullopt;
+    }
+
+    auto query = target.substr(queryPos + 1);
+    static constexpr std::array<std::string_view, 4> kQueryKeys{"uri", "url", "target", "path"};
+    for (auto key : kQueryKeys) {
+        if (auto value = findQueryParameter(query, key)) {
+            return value;
+        }
+    }
+
+    return std::nullopt;
 }
 
 std::unordered_map<std::string, std::string> parseCookies(const std::string& header) {
@@ -140,26 +196,22 @@ bool isPublicResourcePath(std::string_view path) {
 }
 
 bool shouldBypassProbe(const quickgrab::server::RequestContext& ctx) {
-    auto headerIt = ctx.request.base().find("X-Original-URI");
-    if (headerIt == ctx.request.base().end()) {
+    auto originalUri = extractOriginalUri(ctx);
+    if (!originalUri) {
         return false;
     }
 
-    std::string_view originalUri(headerIt->value().data(), headerIt->value().size());
-    if (originalUri.empty()) {
-        return false;
-    }
-
-    auto queryPos = originalUri.find('?');
+    std::string_view view(*originalUri);
+    auto queryPos = view.find('?');
     if (queryPos != std::string_view::npos) {
-        originalUri = originalUri.substr(0, queryPos);
+        view = view.substr(0, queryPos);
     }
 
-    if (originalUri.empty()) {
+    if (view.empty()) {
         return false;
     }
 
-    return isPublicResourcePath(originalUri);
+    return isPublicResourcePath(view);
 }
 
 void sendJsonResponse(quickgrab::server::RequestContext& ctx,

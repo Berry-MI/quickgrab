@@ -70,6 +70,14 @@ location @login {
 location = /login.html {
     root html/static;
 }
+
+# 如果还通过 Nginx 代理后端接口（例如 `location ~ ^/(api|checkLatency|fetchItemInfo)`），同样需要把 Cookie 透传给后端：
+#
+# ```nginx
+# proxy_set_header Cookie $http_cookie;
+# ```
+#
+# 否则用户虽然在登录接口拿到了会话 Cookie，但后续接口校验与 `/internal/auth/check` 探针都读不到该 Cookie，会一直重定向回登录页。
 ```
 
 上述配置会在用户未登录或会话过期时返回 302，引导浏览器重新跳转到登录页；后端同样提供 `GET /api/session` 以供前端轮询当前登录状态。

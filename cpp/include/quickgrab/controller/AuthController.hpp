@@ -12,8 +12,14 @@ public:
     void registerRoutes(quickgrab::server::Router& router);
 
 private:
+    enum class SessionResponseMode {
+        full,
+        probe,
+    };
+
     void handleLogin(quickgrab::server::RequestContext& ctx);
     void handleLogout(quickgrab::server::RequestContext& ctx);
+    void handleSessionStatus(quickgrab::server::RequestContext& ctx, SessionResponseMode mode);
 
     service::AuthService& authService_;
 };

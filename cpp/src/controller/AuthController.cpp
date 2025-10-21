@@ -107,6 +107,12 @@ AuthController::AuthController(service::AuthService& authService)
 void AuthController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/login", [this](auto& ctx) { handleLogin(ctx); });
     router.addRoute("POST", "/api/logout", [this](auto& ctx) { handleLogout(ctx); });
+    router.addRoute("GET", "/api/session", [this](auto& ctx) {
+        handleSessionStatus(ctx, SessionResponseMode::full);
+    });
+    router.addRoute("GET", "/internal/auth/check", [this](auto& ctx) {
+        handleSessionStatus(ctx, SessionResponseMode::probe);
+    });
 }
 
 void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {
@@ -155,6 +161,41 @@ void AuthController::handleLogout(quickgrab::server::RequestContext& ctx) {
 
     boost::json::object payload{{"status", "success"}, {"message", "Logout successful"}};
     sendJsonResponse(ctx, boost::beast::http::status::ok, payload);
+}
+
+void AuthController::handleSessionStatus(quickgrab::server::RequestContext& ctx,
+                                         SessionResponseMode mode) {
+    std::string token;
+    if (auto header = ctx.request.find(boost::beast::http::field::cookie); header != ctx.request.end()) {
+        auto cookies = parseCookies(std::string(header->value()));
+        if (auto it = cookies.find(std::string(service::AuthService::kSessionCookie)); it != cookies.end()) {
+            token = it->second;
+        }
+    }
+
+    auto session = authService_.touchSession(token);
+    if (!session) {
+        ctx.response.set(boost::beast::http::field::set_cookie, buildExpiredCookie());
+        if (mode == SessionResponseMode::full) {
+            boost::json::object payload{{"status", "error"}, {"message", "未登录"}};
+            sendJsonResponse(ctx, boost::beast::http::status::unauthorized, payload);
+        } else {
+            ctx.response.result(boost::beast::http::status::unauthorized);
+            ctx.response.prepare_payload();
+        }
+        return;
+    }
+
+    if (mode == SessionResponseMode::full) {
+        boost::json::object payload{{"status", "success"},
+                                    {"username", session->buyer.username},
+                                    {"accessLevel", session->buyer.accessLevel},
+                                    {"email", session->buyer.email}};
+        sendJsonResponse(ctx, boost::beast::http::status::ok, payload);
+    } else {
+        ctx.response.result(boost::beast::http::status::no_content);
+        ctx.response.prepare_payload();
+    }
 }
 
 } // namespace quickgrab::controller

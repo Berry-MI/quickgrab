@@ -42,6 +42,38 @@ cmake --build build
 
 5. 若需要多实例协同，可结合分布式锁或消息队列实现任务调度一致性。
 
+## Nginx 鉴权静态资源示例
+
+前端页面通常通过 Nginx 暴露（如 `http://localhost:90/index.html`）。为了让静态页面与 Java 服务保持一致的登录校验，可以让 Nginx 在回源静态文件前调用后端新增的 `GET /internal/auth/check` 探针：
+
+```nginx
+location / {
+    auth_request /auth/check;
+    error_page 401 = @login;
+    root   html/static;
+    index  index.html index.htm;
+}
+
+location = /auth/check {
+    internal;
+    proxy_pass http://127.0.0.1:8080/internal/auth/check;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-Original-URI $request_uri;
+    proxy_set_header Cookie $http_cookie;
+}
+
+location @login {
+    return 302 /login.html;
+}
+
+location = /login.html {
+    root html/static;
+}
+```
+
+上述配置会在用户未登录或会话过期时返回 302，引导浏览器重新跳转到登录页；后端同样提供 `GET /api/session` 以供前端轮询当前登录状态。
+
 ## 代理池与抢购流程
 
 - 代理池支持粘滞绑定、成功/失败反馈、隔离与快照，可结合 KDL 接口按需自动补充代理。

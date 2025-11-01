@@ -207,15 +207,15 @@ QueryController::QueryController(service::QueryService& queryService)
     : queryService_(queryService) {}
 
 void QueryController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("GET", "/api/grab/pending", [this](auto& ctx) { handlePending(ctx); });
+    router.addRoute("GET", "/api/get/grab/pending", [this](auto& ctx) { handlePending(ctx); });
 
     auto bindGetRequests = [this](auto& ctx) { handleGetRequests(ctx); };
     router.addRoute("GET", "/getRequests", bindGetRequests);
-    router.addRoute("GET", "/api/getRequests", bindGetRequests);
+    router.addRoute("GET", "/api/get/requests", bindGetRequests);
 
     auto bindGetResults = [this](auto& ctx) { handleGetResults(ctx); };
     router.addRoute("GET", "/getResults", bindGetResults);
-    router.addRoute("GET", "/api/getResults", bindGetResults);
+    router.addRoute("GET", "/api/get/results", bindGetResults);
     auto bindDeleteRequest = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
         if (it == ctx.pathParameters.end()) {
@@ -229,7 +229,7 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
         }
     };
     router.addRoute("DELETE", "/deleteRequest/:id", bindDeleteRequest);
-    router.addRoute("DELETE", "/api/deleteRequest/:id", bindDeleteRequest);
+    router.addRoute("DELETE", "/api/delete/request/:id", bindDeleteRequest);
 
     auto bindDeleteResult = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
@@ -244,7 +244,7 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
         }
     };
     router.addRoute("DELETE", "/deleteResult/:id", bindDeleteResult);
-    router.addRoute("DELETE", "/api/deleteResult/:id", bindDeleteResult);
+    router.addRoute("DELETE", "/api/delete/result/:id", bindDeleteResult);
 
     auto bindGetResult = [this](auto& ctx) {
         auto it = ctx.pathParameters.find("id");
@@ -259,11 +259,11 @@ void QueryController::registerRoutes(quickgrab::server::Router& router) {
         }
     };
     router.addRoute("GET", "/getResult/:id", bindGetResult);
-    router.addRoute("GET", "/api/getResult/:id", bindGetResult);
+    router.addRoute("GET", "/api/get/result/:id", bindGetResult);
 
     auto bindGetBuyers = [this](auto& ctx) { handleGetBuyers(ctx); };
     router.addRoute("GET", "/getBuyer", bindGetBuyers);
-    router.addRoute("GET", "/api/getBuyer", bindGetBuyers);
+    router.addRoute("GET", "/api/get/buyers", bindGetBuyers);
 }
 
 void QueryController::handlePending(quickgrab::server::RequestContext& ctx) {

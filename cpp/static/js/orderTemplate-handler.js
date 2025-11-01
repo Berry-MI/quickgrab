@@ -13,22 +13,19 @@ function getOrderTemplate() {
         return;
     }
 
-    fetch('/api/getNote', {
+    fetch('/api/get/order/note', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(data),
     })
-        .then(response => {
-            if (!response.ok) {
-                return response.json().then(errorData => {
-                    throw new Error(errorData.status.description);
-                });
+        .then(response => response.json())
+        .then(payload => {
+            if (!payload.success || !payload.data) {
+                throw new Error(payload.error?.message || '接口请求失败');
             }
-            return response.json();
-        })
-        .then(data => {
+            const data = payload.data;
             const status = data.status;
             const result = data.result;
 
@@ -230,19 +227,19 @@ function handleImageUpload(input, item) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('customCookies', cookies);
-        fetch('/api/upload', {
+        fetch('/api/post/upload', {
             method: 'POST',
             body: formData,
         })
             .then(response => response.json())
-            .then(data => {
-                if (data && data.result && data.result.url) {
+            .then(payload => {
+                if (payload.success && payload.data && payload.data.result && payload.data.result.url) {
                     showAlert('上传成功', 'success')
-                    console.log('上传成功', data);
-                    item.value = data.result.url;
-                    displayImageURL(input, data.result.url);
+                    console.log('上传成功', payload.data);
+                    item.value = payload.data.result.url;
+                    displayImageURL(input, payload.data.result.url);
                 } else {
-                    showAlert('上传失败', 'error');
+                    showAlert(payload.error?.message || '上传失败', 'error');
                 }
             })
             .catch(error => {

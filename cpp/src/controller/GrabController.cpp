@@ -10,7 +10,7 @@ GrabController::GrabController(service::GrabService& grabService)
     : grabService_(grabService) {}
 
 void GrabController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("POST", "/api/grab/run", [this](auto& ctx) { handleRun(ctx); });
+    router.addRoute("POST", "/api/post/grab/run", [this](auto& ctx) { handleRun(ctx); });
 }
 
 void GrabController::handleRun(quickgrab::server::RequestContext& ctx) {

@@ -1,15 +1,21 @@
 // 获取当前用户信息
 async function fetchUser() {
     try {
-        const response = await fetch('/api/user', {
+        const response = await fetch('/api/get/user', {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json'
             }
         });
         if (response.ok) {
-            const data = await response.json();
-            document.getElementById('username').textContent = data.username;
+            const payload = await response.json();
+            if (payload.success && payload.data) {
+                const account = payload.data.account || payload.data;
+                const displayName = account.displayName || account.username || '未登录';
+                document.getElementById('username').textContent = displayName;
+            } else {
+                console.error('Unexpected user response', payload);
+            }
         } else {
             console.error('Failed to fetch user data');
         }
@@ -21,7 +27,7 @@ async function fetchUser() {
 // 登出功能
 document.getElementById('logout-button').addEventListener('click', async () => {
     try {
-        const response = await fetch('/api/logout', {
+        const response = await fetch('/api/session/logout', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

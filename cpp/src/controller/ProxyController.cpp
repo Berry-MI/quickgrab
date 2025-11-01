@@ -434,14 +434,14 @@ ProxyController::ProxyController(util::HttpClient& client)
     : httpClient_(client) {}
 
 void ProxyController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("POST", "/api/upload", [this](auto& ctx) { handleUpload(ctx); });
-    router.addRoute("GET", "/api/expand", [this](auto& ctx) { handleExpand(ctx); });
-    router.addRoute("GET", "/api/getItemSkuInfo", [this](auto& ctx) { handleGetItemSkuInfo(ctx); });
-    router.addRoute("POST", "/api/loginbyvcode", [this](auto& ctx) { handleLoginByVcode(ctx); });
-    router.addRoute("POST", "/api/getListCart", [this](auto& ctx) { handleGetListCart(ctx); });
-    router.addRoute("POST", "/api/getUserInfo", [this](auto& ctx) { handleGetUserInfo(ctx); });
-    router.addRoute("POST", "/api/getAddOrderData", [this](auto& ctx) { handleGetAddOrderData(ctx); });
-    router.addRoute("POST", "/api/proxy", [this](auto& ctx) { handleProxyRequest(ctx); });
+    router.addRoute("POST", "/api/post/upload", [this](auto& ctx) { handleUpload(ctx); });
+    router.addRoute("GET", "/api/get/expand", [this](auto& ctx) { handleExpand(ctx); });
+    router.addRoute("GET", "/api/get/item/sku-info", [this](auto& ctx) { handleGetItemSkuInfo(ctx); });
+    router.addRoute("POST", "/api/post/auth/login/vcode", [this](auto& ctx) { handleLoginByVcode(ctx); });
+    router.addRoute("POST", "/api/get/cart/list", [this](auto& ctx) { handleGetListCart(ctx); });
+    router.addRoute("POST", "/api/get/cart/user-info", [this](auto& ctx) { handleGetUserInfo(ctx); });
+    router.addRoute("POST", "/api/get/cart/order-data", [this](auto& ctx) { handleGetAddOrderData(ctx); });
+    router.addRoute("POST", "/api/post/proxy", [this](auto& ctx) { handleProxyRequest(ctx); });
 }
 
 void ProxyController::handleUpload(quickgrab::server::RequestContext& ctx) {

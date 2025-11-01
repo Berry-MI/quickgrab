@@ -1,4 +1,5 @@
 #include "quickgrab/controller/AuthController.hpp"
+#include "quickgrab/util/JsonResponse.hpp"
 
 #include <boost/beast/http.hpp>
 #include <boost/json.hpp>
@@ -105,8 +106,8 @@ AuthController::AuthController(service::AuthService& authService)
     : authService_(authService) {}
 
 void AuthController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("POST", "/api/login", [this](auto& ctx) { handleLogin(ctx); });
-    router.addRoute("POST", "/api/logout", [this](auto& ctx) { handleLogout(ctx); });
+    router.addRoute("POST", "/api/post/auth/login", [this](auto& ctx) { handleLogin(ctx); });
+    router.addRoute("POST", "/api/post/auth/logout", [this](auto& ctx) { handleLogout(ctx); });
 }
 
 void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {
@@ -124,7 +125,9 @@ void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {
 
     auto authResult = authService_.authenticate(username, password, rememberMe);
     if (!authResult.success || !authResult.session) {
-        boost::json::object payload{{"status", "error"}, {"message", authResult.message.empty() ? "账号或密码错误" : authResult.message}};
+        std::string message = authResult.message.empty() ? "账号或密码错误" : authResult.message;
+        boost::json::object payload{{"message", message},
+                                    {"reason", authResult.serverError ? "auth.internal_error" : "auth.invalid_credentials"}};
         auto status = authResult.serverError ? boost::beast::http::status::internal_server_error
                                              : boost::beast::http::status::unauthorized;
         sendJsonResponse(ctx, status, payload);
@@ -133,11 +136,24 @@ void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {
 
     ctx.response.set(boost::beast::http::field::set_cookie, authService_.buildSessionCookie(*authResult.session));
 
-    boost::json::object payload{{"status", "success"},
-                                {"message", "Login successful"},
-                                {"username", authResult.session->buyer.username},
-                                {"accessLevel", authResult.session->buyer.accessLevel},
-                                {"email", authResult.session->buyer.email}};
+    boost::json::object user;
+    user["id"] = authResult.session->buyer.id;
+    user["username"] = authResult.session->buyer.username;
+    user["accessLevel"] = authResult.session->buyer.accessLevel;
+    if (!authResult.session->buyer.email.empty()) {
+        user["email"] = authResult.session->buyer.email;
+    }
+
+    boost::json::object session;
+    session["rememberMe"] = authResult.session->rememberMe;
+    session["expiresAt"] = quickgrab::util::formatIsoTimestamp(authResult.session->expiresAt);
+    session["cookieName"] = std::string(service::AuthService::kSessionCookie);
+
+    boost::json::object payload;
+    payload["message"] = "Login successful";
+    payload["user"] = std::move(user);
+    payload["session"] = std::move(session);
+
     sendJsonResponse(ctx, boost::beast::http::status::ok, payload);
 }
 
@@ -153,7 +169,14 @@ void AuthController::handleLogout(quickgrab::server::RequestContext& ctx) {
     authService_.logout(token);
     ctx.response.set(boost::beast::http::field::set_cookie, buildExpiredCookie());
 
-    boost::json::object payload{{"status", "success"}, {"message", "Logout successful"}};
+    boost::json::object session;
+    session["cleared"] = true;
+    session["cookieName"] = std::string(service::AuthService::kSessionCookie);
+
+    boost::json::object payload;
+    payload["message"] = "Logout successful";
+    payload["session"] = std::move(session);
+
     sendJsonResponse(ctx, boost::beast::http::status::ok, payload);
 }
 

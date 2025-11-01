@@ -301,14 +301,15 @@ function setupButtonEvents(item, userInfo) {
         deleteButton.onclick = function () {
             const password = prompt('请输入密码：1');
             if (password === "1") {
-                fetch(`/api/deleteRequest/${item.id}`, {method: 'DELETE'})
-                    .then(response => {
-                        if (response.ok) {
+                fetch(`/api/delete/request/${item.id}`, {method: 'DELETE'})
+                    .then(response => response.json())
+                    .then(payload => {
+                        if (payload.success) {
                             showAlert('删除成功', 'success');
                             closeModal();
                             document.querySelector(`.result-item[data-id="${item.id}"]`).remove();
                         } else {
-                            showAlert('删除失败', 'error');
+                            showAlert(payload.error?.message || '删除失败', 'error');
                         }
                     })
                     .catch(error => console.error('删除失败:', error));
@@ -333,10 +334,15 @@ function setupButtonEvents(item, userInfo) {
 
     // 检查Cookies按钮事件
     document.getElementById('checkCookiesButton').onclick = function () {
-        fetch(`/api/checkCookiesValidity?cookies=${encodeURIComponent(item.cookies)}`)
+        fetch(`/api/get/cookies/validity?cookies=${encodeURIComponent(item.cookies)}`)
             .then(response => response.json())
-            .then(data => {
-                showAlert(data.message, 'info');
+            .then(payload => {
+                if (payload.success) {
+                    const message = payload.data?.message || 'Cookies 校验完成';
+                    showAlert(message, 'info');
+                } else {
+                    showAlert(payload.error?.message || '检查失败', 'error');
+                }
             })
             .catch(error => console.error('检查失败:', error));
     };

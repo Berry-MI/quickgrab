@@ -59,7 +59,7 @@ UserController::UserController(service::AuthService& authService)
     : authService_(authService) {}
 
 void UserController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("GET", "/api/user", [this](auto& ctx) { handleGetUser(ctx); });
+    router.addRoute("GET", "/api/get/user", [this](auto& ctx) { handleGetUser(ctx); });
 }
 
 void UserController::handleGetUser(quickgrab::server::RequestContext& ctx) {

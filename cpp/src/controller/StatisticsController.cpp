@@ -83,10 +83,10 @@ StatisticsController::StatisticsController(service::StatisticsService& statistic
     : statisticsService_(statisticsService) {}
 
 void StatisticsController::registerRoutes(quickgrab::server::Router& router) {
-    router.addRoute("GET", "/api/statistics", [this](auto& ctx) { handleStatistics(ctx); });
-    router.addRoute("GET", "/api/dailyStats", [this](auto& ctx) { handleDailyStats(ctx); });
-    router.addRoute("GET", "/api/hourlyStats", [this](auto& ctx) { handleHourlyStats(ctx); });
-    router.addRoute("GET", "/api/buyers", [this](auto& ctx) { handleBuyers(ctx); });
+    router.addRoute("GET", "/api/get/statistics", [this](auto& ctx) { handleStatistics(ctx); });
+    router.addRoute("GET", "/api/get/statistics/daily", [this](auto& ctx) { handleDailyStats(ctx); });
+    router.addRoute("GET", "/api/get/statistics/hourly", [this](auto& ctx) { handleHourlyStats(ctx); });
+    router.addRoute("GET", "/api/get/statistics/buyers", [this](auto& ctx) { handleBuyers(ctx); });
 }
 
 static std::optional<std::string> normalizeIsoToMysql(std::optional<std::string> iso) {

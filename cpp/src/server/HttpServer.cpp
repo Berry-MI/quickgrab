@@ -1,14 +1,20 @@
 #include "quickgrab/server/HttpServer.hpp"
 #include "quickgrab/server/Router.hpp"
 #include "quickgrab/server/RequestContext.hpp"
+#include "quickgrab/util/JsonResponse.hpp"
 
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/version.hpp>
+#include <boost/json.hpp>
+
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
@@ -64,6 +70,8 @@ private:
             }
         }
 
+        wrapJsonEnvelope(ctx);
+
         auto response = std::make_shared<RequestContext::HttpResponse>(std::move(ctx.response));
         boost::beast::http::async_write(stream_, *response,
             boost::asio::bind_executor(stream_.get_executor(),
@@ -84,6 +92,70 @@ private:
         boost::system::error_code ec;
         stream_.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         stream_.socket().close(ec);
+    }
+
+    void wrapJsonEnvelope(RequestContext& ctx) {
+        auto& response = ctx.response;
+        if (response.body().empty()) {
+            return;
+        }
+
+        auto contentTypeIt = response.find(boost::beast::http::field::content_type);
+        if (contentTypeIt == response.end()) {
+            return;
+        }
+
+        std::string contentType = std::string(contentTypeIt->value());
+        auto toLower = [](std::string value) {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+            return value;
+        };
+
+        if (contentType.find("application/json") == std::string::npos) {
+            std::string lowered = toLower(contentType);
+            if (lowered.find("application/json") == std::string::npos) {
+                return;
+            }
+        }
+
+        std::string target(ctx.request.target());
+
+        if (auto header = response.find("X-Api-Envelope"); header != response.end()) {
+            std::string flag = toLower(std::string(header->value()));
+            response.erase(header);
+            if (flag == "skip") {
+                return;
+            }
+        }
+
+        bool success = response.result_int() >= 200 && response.result_int() < 400;
+
+        boost::json::value parsed;
+        try {
+            parsed = boost::json::parse(response.body());
+        } catch (const std::exception&) {
+            parsed = boost::json::value(boost::json::string(response.body()));
+        }
+
+        std::string message;
+        if (!success && parsed.is_object()) {
+            const auto& object = parsed.as_object();
+            if (auto it = object.if_contains("message"); it && it->is_string()) {
+                message = std::string(it->as_string().c_str());
+            } else if (auto it = object.if_contains("error"); it && it->is_string()) {
+                message = std::string(it->as_string().c_str());
+            }
+        }
+
+        boost::json::object envelope = success
+            ? quickgrab::util::makeSuccessResponse(parsed, target)
+            : quickgrab::util::makeErrorDetails(message, parsed, target);
+
+        response.body() = boost::json::serialize(envelope);
+        response.set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
+        response.prepare_payload();
     }
 
     boost::beast::tcp_stream stream_;

@@ -1284,18 +1284,7 @@
 
         // 获取用户信息并保存账号
         try {
-            const response = await fetch('/api/getUserInfo', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    cookie: cookieStr
-                })
-            });
-
-            const data = await response.json();
-
+            const data = await callCartEndpoint('/api/get/cart/user-info', { cookie: cookieStr });
             if (data.status.code === 0 && data.status.message === 'OK') {
                 const result = data.result;
                 const basic = result.basic || {};
@@ -1332,6 +1321,22 @@
         await fetchUserInfo(cookieStr);
     }
 
+    async function callCartEndpoint(path, params) {
+        const response = await fetch(path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams(params)
+        });
+
+        const payload = await response.json();
+        if (!payload.success || !payload.data) {
+            throw new Error(payload.error?.message || '接口请求失败');
+        }
+        return payload.data;
+    }
+
     // 处理退出登录
     function handleLogout() {
         localStorage.removeItem('cartCookie');
@@ -1345,18 +1350,7 @@
     // 获取购物车数据
     async function fetchCartData(cookie) {
         try {
-            const response = await fetch('/api/getListCart', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    cookie: cookie
-                })
-            });
-
-            const data = await response.json();
-
+            const data = await callCartEndpoint('/api/get/cart/list', { cookie });
             if (data.status.code === 0) {
                 renderCartData(data.result);
             } else {
@@ -1371,17 +1365,7 @@
     // 获取用户信息
     async function fetchUserInfo(cookie) {
         try {
-            const response = await fetch('/api/getUserInfo', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    cookie: cookie
-                })
-            });
-
-            const data = await response.json();
+            const data = await callCartEndpoint('/api/get/cart/user-info', { cookie });
 
             if (data.status.code === 0 && data.status.message === 'OK') {
                 const result = data.result;
@@ -1487,18 +1471,10 @@
 
         try {
             // 调用代理接口获取订单数据
-            const response = await fetch('/api/getAddOrderData', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    cookie: cookie,
-                    link: orderLink
-                })
+            const data = await callCartEndpoint('/api/get/cart/order-data', {
+                cookie: cookie,
+                link: orderLink
             });
-
-            const data = await response.json();
             console.log('订单数据响应:', data);
 
             if (data.order?.status?.code === 0) {

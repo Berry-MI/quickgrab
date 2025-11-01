@@ -208,13 +208,18 @@
         const itemId = itemIdMatch[1];
         globalState.itemId = itemId;
         const param = encodeURIComponent(JSON.stringify({itemId: itemId}));
-        const apiUrl = `/api/getItemSkuInfo?param=${param}`;
+        const apiUrl = `/api/get/item/sku-info?param=${param}`;
 
         try {
             const response = await fetch(apiUrl, {
                 method: 'GET'
             });
-            const data = await response.json();
+            const payload = await response.json();
+            if (!payload.success || !payload.data) {
+                showAlert('API请求失败');
+                return;
+            }
+            const data = payload.data;
 
             if (data.status.code !== 0) {
                 showAlert('API请求失败: ' + data.status.message);

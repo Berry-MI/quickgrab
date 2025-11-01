@@ -121,9 +121,6 @@ private:
         }
 
         std::string target(ctx.request.target());
-        if (target == "/api/login" || target == "/api/loginbyvcode") {
-            return;
-        }
 
         if (auto header = response.find("X-Api-Envelope"); header != response.end()) {
             std::string flag = toLower(std::string(header->value()));

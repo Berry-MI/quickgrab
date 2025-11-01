@@ -11,9 +11,8 @@
 
 namespace quickgrab::util {
 
-inline std::string makeIsoTimestamp() {
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+inline std::string formatIsoTimestamp(std::chrono::system_clock::time_point timePoint) {
+    const std::time_t time = std::chrono::system_clock::to_time_t(timePoint);
     std::tm tm{};
 #if defined(_WIN32)
     gmtime_s(&tm, &time);
@@ -23,6 +22,10 @@ inline std::string makeIsoTimestamp() {
     std::ostringstream oss;
     oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
     return oss.str();
+}
+
+inline std::string makeIsoTimestamp() {
+    return formatIsoTimestamp(std::chrono::system_clock::now());
 }
 
 inline boost::json::object makeSuccessResponse(const boost::json::value& data,

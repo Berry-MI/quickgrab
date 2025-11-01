@@ -10,7 +10,7 @@ async function sendRequest(data) {
     try {
         setButtonLoading(submitButton, true, '提交中...');
 
-        const response = await fetch('api/submitRequest', {
+        const response = await fetch('/api/submit/request', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -18,19 +18,12 @@ async function sendRequest(data) {
             body: JSON.stringify(data)
         });
 
-        // 检查响应状态是否为2xx
-        if (!response.ok) {
-            throw new Error('网络响应不正常: ' + response.statusText);
+        const payload = await response.json();
+        if (!payload.success || !payload.data) {
+            throw new Error(payload.error?.message || '提交失败');
         }
 
-        const responseData = await response.json();
-
-        // 检查响应数据是否为有效的JSON
-        if (!responseData) {
-            throw new Error('响应数据不是有效的JSON');
-        }
-
-        handleResponse(responseData);
+        handleResponse(payload.data);
     } catch (error) {
         console.error('获取操作中出现问题:', error);
         showAlert('请求失败，请稍后重试');
@@ -151,19 +144,20 @@ function checkLatency() {
     if (data == null) {
         return;
     }
-    fetch('/api/checkLatency', {
+    fetch('/api/get/network/latency', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(data),
     })
-        .then(response => response.text())
-        .then(data => {
-            if (data != '') {
-                document.getElementById('latency').innerText = `网络延迟: ${data}ms`; // 显示延迟
+        .then(response => response.json())
+        .then(payload => {
+            if (payload.success && payload.data) {
+                const latencyValue = payload.data.value || payload.data.latency || payload.data;
+                document.getElementById('latency').innerText = `网络延迟: ${latencyValue}ms`;
             } else {
-                showAlert('没有获取到', 'info');
+                showAlert(payload.error?.message || '没有获取到', 'info');
             }
         })
         .catch(error => showAlert('查询失败:' + error, 'error'));
@@ -185,7 +179,7 @@ export async function setItemInfo() {
     try {
         setButtonLoading(setTimeButton, true, '');
 
-        const response = await fetch('/api/fetchItemInfo', {
+        const response = await fetch('/api/get/item/details', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -193,8 +187,11 @@ export async function setItemInfo() {
             body: 'link=' + encodeURIComponent(link)+'&cookies=' + encodeURIComponent(cookies),
         });
 
-        const data = await response.json();
-        return processResponseData(data);
+        const payload = await response.json();
+        if (!payload.success || !payload.data) {
+            throw new Error(payload.error?.message || '接口返回异常');
+        }
+        return processResponseData(payload.data);
 
     } catch (error) {
         console.error('查询失败:', error);

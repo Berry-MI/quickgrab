@@ -48,20 +48,28 @@ class ListHandler {
     // 获取买家列表
     async fetchBuyers() {
         try {
-            const userResponse = await fetch('/api/user');
-            const userData = await userResponse.json();
+            const userResponse = await fetch('/api/get/user');
+            const userPayload = await userResponse.json();
+            if (!userPayload.success || !userPayload.data) {
+                throw new Error('无法获取用户信息');
+            }
+            const currentAccount = userPayload.data.account || userPayload.data;
 
             // 显示/隐藏买家选择器
             const buyerSelect = document.getElementById('buyerSelect');
-            if (userData.accessLevel > 3) {
+            if ((currentAccount.accessLevel || currentAccount.privilegeLevel || 0) > 3) {
                 buyerSelect.style.display = 'block';
             } else {
                 buyerSelect.style.display = 'none';
             }
 
-            const currentUser = userData.username;
-            const buyersResponse = await fetch('/api/getBuyer');
-            const buyersData = await buyersResponse.json();
+            const currentUser = currentAccount.username || currentAccount.displayName;
+            const buyersResponse = await fetch('/api/get/buyers');
+            const buyersPayload = await buyersResponse.json();
+            if (!buyersPayload.success || !buyersPayload.data) {
+                throw new Error('无法获取买家列表');
+            }
+            const buyersData = buyersPayload.data.buyers || buyersPayload.data.items || [];
 
             // 填充买家选择器
             buyerSelect.innerHTML = '<option value="">所有买家</option>';
@@ -107,9 +115,12 @@ class ListHandler {
         try {
             const query = new URLSearchParams(this.getQueryParams());
             const response = await fetch(`${this.options.fetchUrl}?${query.toString()}`);
-            const data = await response.json();
-
-            this.renderItems(data);
+            const payload = await response.json();
+            if (!payload.success) {
+                throw new Error(payload.error?.message || '查询失败');
+            }
+            const dataset = payload.data?.items || payload.data?.pending || payload.data || [];
+            this.renderItems(dataset);
 
             this.offset += this.options.limit;
             this.loading = false;

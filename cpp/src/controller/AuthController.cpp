@@ -106,7 +106,7 @@ AuthController::AuthController(service::AuthService& authService)
 
 void AuthController::registerRoutes(quickgrab::server::Router& router) {
     router.addRoute("POST", "/api/login", [this](auto& ctx) { handleLogin(ctx); });
-    router.addRoute("POST", "/api/logout", [this](auto& ctx) { handleLogout(ctx); });
+    router.addRoute("POST", "/api/session/logout", [this](auto& ctx) { handleLogout(ctx); });
 }
 
 void AuthController::handleLogin(quickgrab::server::RequestContext& ctx) {

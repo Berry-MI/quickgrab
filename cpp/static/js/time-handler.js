@@ -9,27 +9,36 @@ document.addEventListener("DOMContentLoaded", function() {
         .catch(error => console.error('Error during initialization:', error));
 });
 function fetchBuyers() {
-    return fetch('/api/user')
+    return fetch('/api/get/user')
         .then(response => response.json())
-        .then(data => {
+        .then(payload => {
+            if (!payload.success || !payload.data) {
+                throw new Error('无法获取用户信息');
+            }
+            const account = payload.data.account || payload.data;
+
             // 设定邮箱地址
             const emailField = document.getElementById('email');
-            emailField.value = data.email;
+            emailField.value = account.email || '';
 
-            if (data.accessLevel > 3) {
+            if ((account.accessLevel || account.privilegeLevel || 0) > 3) {
                 document.getElementById('buyerSelectList').style.display = 'flex';
             } else {
                 document.getElementById('buyerSelectList').style.display = 'none';
             }
 
-            let currentUser = data.username;
-            return fetch('/api/getBuyer').then(response => ({ response, currentUser }));
+            let currentUser = account.username || account.displayName;
+            return fetch('/api/get/buyers').then(response => ({ response, currentUser }));
         })
         .then(({ response, currentUser }) => response.json().then(data => ({ data, currentUser })))
         .then(({ data, currentUser }) => {
+            if (!data.success || !data.data) {
+                throw new Error('无法获取买家列表');
+            }
+            const buyers = data.data.buyers || data.data.items || [];
             const buyerSelect = document.getElementById('buyerSelect');
             buyerSelect.innerHTML = '<option value="">所有买家</option>';
-            data.forEach(buyer => {
+            buyers.forEach(buyer => {
                 const option = document.createElement('option');
                 option.value = buyer.id;
                 option.textContent = buyer.username;

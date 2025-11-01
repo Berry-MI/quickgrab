@@ -613,19 +613,19 @@ ToolController::ToolController(quickgrab::util::HttpClient& httpClient)
 void ToolController::registerRoutes(quickgrab::server::Router& router) {
     auto bindGetNote = [this](auto& ctx) { handleGetNote(ctx); };
     router.addRoute("POST", "/getNote", bindGetNote);
-    router.addRoute("POST", "/api/getNote", bindGetNote);
+    router.addRoute("POST", "/api/get/order/note", bindGetNote);
 
     auto bindFetchItemInfo = [this](auto& ctx) { handleFetchItemInfo(ctx); };
     router.addRoute("POST", "/fetchItemInfo", bindFetchItemInfo);
-    router.addRoute("POST", "/api/fetchItemInfo", bindFetchItemInfo);
+    router.addRoute("POST", "/api/get/item/details", bindFetchItemInfo);
 
     auto bindCheckCookies = [this](auto& ctx) { handleCheckCookies(ctx); };
     router.addRoute("GET", "/checkCookiesValidity", bindCheckCookies);
-    router.addRoute("GET", "/api/checkCookiesValidity", bindCheckCookies);
+    router.addRoute("GET", "/api/get/cookies/validity", bindCheckCookies);
 
     auto bindCheckLatency = [this](auto& ctx) { handleCheckLatency(ctx); };
     router.addRoute("POST", "/checkLatency", bindCheckLatency);
-    router.addRoute("POST", "/api/checkLatency", bindCheckLatency);
+    router.addRoute("POST", "/api/get/network/latency", bindCheckLatency);
 }
 
 void ToolController::handleGetNote(quickgrab::server::RequestContext& ctx) {

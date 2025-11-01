@@ -11,23 +11,31 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 
 function fetchBuyers() {
-    return fetch('/api/user')
+    return fetch('/api/get/user')
         .then(response => response.json())
-        .then(data => {
-            if (data.accessLevel > 3) {
+        .then(payload => {
+            if (!payload.success || !payload.data) {
+                throw new Error('无法获取用户信息');
+            }
+            const account = payload.data.account || payload.data;
+            if ((account.accessLevel || account.privilegeLevel || 0) > 3) {
                 document.getElementById('buyerSelectList').style.display = 'block';
             } else {
                 document.getElementById('buyerSelectList').style.display = 'none';
             }
 
-            let currentUser = data.username;
-            return fetch('/api/getBuyer').then(response => ({ response, currentUser }));
+            let currentUser = account.username || account.displayName;
+            return fetch('/api/get/buyers').then(response => ({ response, currentUser }));
         })
         .then(({ response, currentUser }) => response.json().then(data => ({ data, currentUser })))
         .then(({ data, currentUser }) => {
+            if (!data.success || !data.data) {
+                throw new Error('无法加载买家列表');
+            }
+            const buyers = data.data.buyers || data.data.items || [];
             const buyerSelect = document.getElementById('buyerSelect');
             buyerSelect.innerHTML = '<option value="">所有买家</option>';
-            data.forEach(buyer => {
+            buyers.forEach(buyer => {
                 const option = document.createElement('option');
                 option.value = buyer.id;
                 option.textContent = buyer.username;
@@ -110,11 +118,15 @@ function updateStatistics() {
     const startTimeStr = start ? start.toISOString() : '';
     const endTimeStr = end ? end.toISOString() : '';
 
-    fetch(`/api/statistics?buyerId=${buyerId}&status=${status}&startTime=${startTimeStr}&endTime=${endTimeStr}`)
+    fetch(`/api/get/statistics?buyerId=${buyerId}&status=${status}&startTime=${startTimeStr}&endTime=${endTimeStr}`)
         .then(response => response.json())
-        .then(data => {
-            updateTable(data.typeStats);
-        });
+        .then(payload => {
+            if (!payload.success || !payload.data) {
+                throw new Error('统计数据获取失败');
+            }
+            updateTable(payload.data.typeStats || []);
+        })
+        .catch(error => console.error('Error fetching statistics:', error));
 }
 
 function updateTable(typeStats) {
@@ -285,15 +297,24 @@ function updateCharts() {
     const buyerId = document.getElementById('buyerSelect').value;
     const status = document.getElementById('statusFilter').value;
 
-    fetch(`/api/dailyStats?buyerId=${buyerId}&status=${status}`)
+    fetch(`/api/get/statistics/daily?buyerId=${buyerId}&status=${status}`)
         .then(response => response.json())
-        .then(dailyStats => {
-            fetch(`/api/hourlyStats?buyerId=${buyerId}&status=${status}`)
+        .then(dailyPayload => {
+            if (!dailyPayload.success) {
+                throw new Error('日统计加载失败');
+            }
+            const dailyStats = dailyPayload.data || [];
+            fetch(`/api/get/statistics/hourly?buyerId=${buyerId}&status=${status}`)
                 .then(response => response.json())
-                .then(hourlyStats => {
+                .then(hourlyPayload => {
+                    if (!hourlyPayload.success) {
+                        throw new Error('小时统计加载失败');
+                    }
+                    const hourlyStats = hourlyPayload.data || [];
                     drawCharts(dailyStats, hourlyStats);
                 });
-        });
+        })
+        .catch(error => console.error('Error updating charts:', error));
 }
 
 function formatDate(dateString) {
